@@ -2,15 +2,15 @@ import java.io.*;
 import java.util.*;
 
 public class PreferencesManager {
-    private static final String CONFIG_FILE = System.getProperty("user.home") 
-            + File.separator + "aiWritingAssistant.properties";
+    private static final String CONFIG_FILE = System.getProperty("user.home")
+            + File.separator + "syngrafi.properties";
     private final Properties properties = new Properties();
 
     public PreferencesManager() {
         loadPreferences();
     }
 
-    private void loadPreferences() {
+    void loadPreferences() {
         File file = new File(CONFIG_FILE);
         if (file.exists()) {
             try (FileInputStream fis = new FileInputStream(file)) {
@@ -23,7 +23,7 @@ public class PreferencesManager {
 
     public void savePreferences() {
         try (FileOutputStream fos = new FileOutputStream(CONFIG_FILE)) {
-            properties.store(fos, "AI Writing Assistant Settings");
+            properties.store(fos, "Syngrafi Settings");
         } catch (IOException e) {
             e.printStackTrace();
         }

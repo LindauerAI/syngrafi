@@ -2,40 +2,31 @@
  * Manages the generation of prompts for autocomplete functionality.
  */
 public class AutocompletePromptManager {
-    
-    /**
-     * Generates a prompt for autocomplete based on the current text and variation number.
-     * 
-     * @param currentText The current plain text
-     * @param variation   Which variation of the prompt to generate (1-3)
-     * @return A formatted prompt for the AI model
-     */
+
     public static String getPrompt(String currentText, int variation) {
-        // Extract the most recent context
-        String context = extractRecentContext(currentText);
-        
-        // Base prompt
-        String basePrompt = "You are a professional writing autocomplete assistant. "
-                + "Provide a succinct, coherent continuation of the user’s text. "
-                + "Do NOT repeat any text verbatim from the prompt. "
-                + "Limit to 2 sentences maximum. No ellipses. Consider whitespace carefully."
-                + "Context:\n\""
-                + context + "\"\n\nContinuation:";
-        
-        // Variation-based wording
+        String context = extractContext(currentText);
+
+        String basePrompt = "You are a professional writing autocomplete assistant called Syngrafi. "
+                + "Please continue the user's text carefully, ensuring that punctuation is followed by a space IF NOT ALREADY. "
+                + "Return up to 2 sentences, without repeating ANY text in the \"text so far\" portion (in the backticks). No ellipses. "
+                + "Text so far:\n```"
+                + context + "\n```\nContinuation:";
+
         switch (variation) {
-            case 1: return basePrompt + " Provide the most likely next phrase.";
-            case 2: return basePrompt + " Provide an alternate direction.";
-            case 3: return basePrompt + " Expand with a bit more detail.";
-            default: return basePrompt;
+            case 1:
+                return basePrompt + " Provide the most likely next phrase.";
+            case 2:
+                return basePrompt + " Provide an alternative direction.";
+            default:
+                return basePrompt + " Expand on this with additional detail.";
         }
     }
-    
-    private static String extractRecentContext(String fullText) {
-        String trimmed = fullText.trim();
-        if (trimmed.length() <= 400) {
-            return trimmed;
+
+    private static String extractContext(String text) {
+        text = text.trim();
+        if (text.length() <= 400) {
+            return text;
         }
-        return trimmed.substring(trimmed.length() - 400);
+        return text.substring(text.length() - 400);
     }
 }
