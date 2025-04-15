@@ -1,7 +1,6 @@
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
-import java.io.File;
 
 public class SettingsDialog extends JDialog {
     private JTextField openAIKeyField;
@@ -10,13 +9,16 @@ public class SettingsDialog extends JDialog {
     private JComboBox<String> modelComboBox;
     private JTextField numSuggestionsField;
     private JTextField defaultPathField;
+
+    private JTextField autocompleteDelayField; // NEW
+
     private PreferencesManager preferencesManager;
 
     public SettingsDialog(JFrame parent, PreferencesManager preferencesManager) {
         super(parent, "Settings", true);
         this.preferencesManager = preferencesManager;
-        loadPreferences();
         initUI();
+        loadPreferences();
         pack();
         setLocationRelativeTo(parent);
     }
@@ -57,8 +59,12 @@ public class SettingsDialog extends JDialog {
         defaultPathField = new JTextField(20);
         panel.add(defaultPathField);
 
-        providerComboBox.addActionListener(e -> updateModelComboBox());
+        // Autocomplete Delay
+        panel.add(new JLabel("Autocomplete Delay (ms):"));
+        autocompleteDelayField = new JTextField(6);
+        panel.add(autocompleteDelayField);
 
+        providerComboBox.addActionListener(e -> updateModelComboBox());
         add(panel, BorderLayout.CENTER);
 
         JButton saveButton = new JButton("Save");
@@ -74,6 +80,7 @@ public class SettingsDialog extends JDialog {
                 provider.equals("OpenAI") ? "gpt-4o" : "gemini-2.0-flash");
         String numSuggestions = preferencesManager.getPreference("numSuggestions", "3");
         String defaultPath = preferencesManager.getPreference("defaultPath", System.getProperty("user.dir"));
+        String delay = preferencesManager.getPreference("autocompleteDelay", "1000");
 
         openAIKeyField.setText(openAIKey);
         geminiKeyField.setText(geminiKey);
@@ -82,6 +89,7 @@ public class SettingsDialog extends JDialog {
         modelComboBox.setSelectedItem(model);
         numSuggestionsField.setText(numSuggestions);
         defaultPathField.setText(defaultPath);
+        autocompleteDelayField.setText(delay);
     }
 
     private void updateModelComboBox() {
@@ -106,7 +114,6 @@ public class SettingsDialog extends JDialog {
         if (numSuggestionsVal.isEmpty()) {
             numSuggestionsVal = "3";
         }
-        // clamp to 1..10
         int n = 3;
         try {
             n = Math.max(1, Math.min(10, Integer.parseInt(numSuggestionsVal)));
@@ -119,13 +126,22 @@ public class SettingsDialog extends JDialog {
             defaultPath = System.getProperty("user.dir");
         }
 
-        // Save them all:
+        String delayVal = autocompleteDelayField.getText().trim();
+        int delay = 100;
+        try {
+            delay = Integer.parseInt(delayVal);
+            if (delay < 0) delay = 100;
+        } catch (NumberFormatException ex) {
+            delay = 100;
+        }
+
         preferencesManager.setPreference("apiKeyOpenAI", openAIKey);
         preferencesManager.setPreference("apiKeyGemini", geminiKey);
         preferencesManager.setPreference("provider", provider);
         preferencesManager.setPreference("model", model);
         preferencesManager.setPreference("numSuggestions", String.valueOf(n));
         preferencesManager.setPreference("defaultPath", defaultPath);
+        preferencesManager.setPreference("autocompleteDelay", String.valueOf(delay));
         preferencesManager.savePreferences();
 
         if (getParent() instanceof Syngrafi) {

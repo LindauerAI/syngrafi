@@ -6,18 +6,26 @@ import javax.swing.text.*;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 import javax.swing.text.html.StyleSheet;
+import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
-import java.awt.*;
-
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.concurrent.CompletableFuture;
 
+/**
+ * A text editor that uses HTMLEditorKit for formatting,
+ * tracks AI/Human character counts, supports toggles for bold/italic/underline,
+ * headings (h1/h2) in actual HTML tags, and an adjustable autocomplete timer.
+ *
+ * Shift+Enter / Enter use the default HTMLEditorKit behavior.
+ * If user presses Enter on a heading line, the next line becomes normal text.
+ */
 public class ImprovedTextEditor extends JTextPane {
     private final JLabel statusBar;
     private final PreferencesManager prefs;
     private APIProvider currentProvider;
+
     private Timer autocompleteTimer;
     private boolean isAutocompleteActive = false;
     private JPopupMenu autoCompletePopup;
@@ -33,7 +41,17 @@ public class ImprovedTextEditor extends JTextPane {
     public ImprovedTextEditor(JLabel statusBar, PreferencesManager prefs) {
         this.statusBar = statusBar;
         this.prefs = prefs;
-        setupEditorKit();
+
+        // Use an HTML editor kit with minimal styling
+        HTMLEditorKit kit = new HTMLEditorKit();
+        setEditorKit(kit);
+
+        // Provide some default style for headings, normal text
+        StyleSheet styles = kit.getStyleSheet();
+        styles.addRule("body { font-size: 12pt; font-family: Serif; }");
+        styles.addRule("h1 { font-size: 24pt; }");
+        styles.addRule("h2 { font-size: 18pt; }");
+
         setText("");
         autoCompletePopup = new JPopupMenu();
 
@@ -42,20 +60,59 @@ public class ImprovedTextEditor extends JTextPane {
         setupTypingListener();
         loadNumSuggestions();
 
-        // We'll rely on the default key actions from HTMLEditorKit
-        // No SHIFT+ENTER/ENTER override
+        // We rely on the default HTMLEditorKit behavior for Enter/Shift+Enter
+        // but we do intercept 'Enter' in processKeyEvent to see if user is in a heading.
     }
 
-    private void setupEditorKit() {
-        HTMLEditorKit kit = new HTMLEditorKit();
-        setEditorKit(kit);
+    /**
+     * We override processKeyEvent so that after user presses Enter
+     * on a heading line, we set them to normal text for the next line.
+     */
+    @Override
+    protected void processKeyEvent(KeyEvent e) {
+        super.processKeyEvent(e);
 
-        // Minimal style adjustments
-        StyleSheet styles = kit.getStyleSheet();
-        // For basic headings, let <h1> be 24pt, <h2> 18pt, normal 12pt, etc.
-        styles.addRule("body { font-size: 12pt; font-family: Serif; }");
-        styles.addRule("h1 { font-size: 24pt; }");
-        styles.addRule("h2 { font-size: 18pt; }");
+        // If the user just pressed Enter, check if caret is inside <h1>/<h2>
+        if (e.getID() == KeyEvent.KEY_PRESSED && e.getKeyCode() == KeyEvent.VK_ENTER) {
+            if (isCaretInHeading()) {
+                // On next event cycle, revert to normal text
+                SwingUtilities.invokeLater(this::setNormalText);
+            }
+        }
+    }
+
+    public void setAPIProvider(APIProvider provider) {
+        this.currentProvider = provider;
+    }
+
+    /**
+     * Returns true if the caret is inside <h1>...</h1> or <h2>...</h2>
+     */
+    private boolean isCaretInHeading() {
+        try {
+            int pos = getCaretPosition();
+            Document doc = getDocument();
+            String text = doc.getText(0, doc.getLength());
+
+            // Find the last <h1> or <h2> before 'pos'
+            int h1Start = text.lastIndexOf("<h1>", pos);
+            int h2Start = text.lastIndexOf("<h2>", pos);
+            if (h1Start < 0 && h2Start < 0) return false;
+
+            boolean isH1 = (h1Start > h2Start); // which is bigger?
+            int startTag = isH1 ? h1Start : h2Start;
+            String closeTag = isH1 ? "</h1>" : "</h2>";
+
+            // find matching closeTag after startTag
+            int closePos = text.indexOf(closeTag, startTag);
+            if (closePos < 0) return false;
+
+            // If 'pos' is between startTag and closePos, we are in heading
+            return (pos >= startTag && pos <= closePos);
+        } catch (BadLocationException ex) {
+            ex.printStackTrace();
+            return false;
+        }
     }
 
     private void setupDocumentListener() {
@@ -75,13 +132,6 @@ public class ImprovedTextEditor extends JTextPane {
                 isDirty = true;
             }
         });
-    }
-
-    public boolean isDirty() {
-        return isDirty;
-    }
-    public void markClean() {
-        isDirty = false;
     }
 
     private void setupAutocompleteTimer() {
@@ -112,38 +162,37 @@ public class ImprovedTextEditor extends JTextPane {
         currentSuggestions = new String[n];
     }
 
-    public void setAPIProvider(APIProvider provider) {
-        this.currentProvider = provider;
-    }
-
-    public void resetCharacterCounts() {
-        aiCharCount = 0;
-        humanCharCount = 0;
-    }
-    public void setAICharCount(int n) { aiCharCount = n; }
-    public void setHumanCharCount(int n) { humanCharCount = n; }
-    public int getAICharCount() { return aiCharCount; }
-    public int getHumanCharCount() { return humanCharCount; }
-
+    /**
+     * Reads the user's chosen "autocompleteDelay" in ms from settings
+     * and waits that long after the last typed character before triggering suggestions.
+     */
     private void scheduleAutocomplete() {
         if (isAutocompleteActive || currentProvider == null) return;
+
+        int delay = 1000;
+        try {
+            delay = Integer.parseInt(prefs.getPreference("autocompleteDelay", "1000"));
+            if (delay < 0) delay = 1000;
+        } catch (Exception ex) {
+            delay = 1000;
+        }
 
         autocompleteTimer.cancel();
         autocompleteTimer = new Timer("AutocompleteTimer", true);
 
-        autocompleteTimer.schedule(new java.util.TimerTask() {
+        autocompleteTimer.schedule(new TimerTask() {
             @Override
             public void run() {
                 SwingUtilities.invokeLater(() -> triggerAutocomplete());
             }
-        }, 1000); // 1 second
+        }, delay);
     }
 
     public void triggerAutocomplete() {
         if (currentProvider == null || isAutocompleteActive) return;
         String contextText = getPlainText();
         if (contextText.length() < 20) {
-            return; // skip if doc too short
+            return; // skip if doc is too short
         }
 
         loadNumSuggestions();
@@ -155,7 +204,6 @@ public class ImprovedTextEditor extends JTextPane {
             final int variation = (i % 3) + 1;
             futures[i] = CompletableFuture.supplyAsync(() -> {
                 try {
-                    // We'll assume your new base prompt has a line about capitalization
                     String prompt = AutocompletePromptManager.getPrompt(contextText, variation);
                     return currentProvider.generateCompletion(prompt);
                 } catch (Exception ex) {
@@ -183,13 +231,9 @@ public class ImprovedTextEditor extends JTextPane {
         });
     }
 
-    /**
-     * Return plain text (no HTML tags).
-     */
     private String getPlainText() {
         try {
-            Document doc = getDocument();
-            return doc.getText(0, doc.getLength());
+            return getDocument().getText(0, getDocument().getLength());
         } catch (BadLocationException ex) {
             ex.printStackTrace();
             return "";
@@ -197,19 +241,13 @@ public class ImprovedTextEditor extends JTextPane {
     }
 
     /**
-     * The older approach with more thorough overlap detection
+     * Thorough overlap detection, removing repeated leading words if they appear at the tail of the doc
      */
     private String cleanOverlap(String existingText, String suggestion) {
         suggestion = suggestion.trim();
         if (suggestion.isEmpty()) return suggestion;
 
-        // We'll do a multi-step approach:
-        // 1) remove repeated leading words from suggestion if they appear at the tail of existingText
-        // 2) remove ellipses if any
-        // 3) optionally fix spacing or capitalization if needed
-        // We'll keep it straightforward.
-
-        // step 1: overlap
+        // 1) Overlap detection
         int overlapZone = Math.min(40, existingText.length());
         String tail = existingText.substring(existingText.length() - overlapZone).toLowerCase();
         String lowerSug = suggestion.toLowerCase();
@@ -226,7 +264,7 @@ public class ImprovedTextEditor extends JTextPane {
             suggestion = suggestion.substring(maxLen).trim();
         }
 
-        // step 2: remove trailing ellipses
+        // 2) remove trailing ellipses
         while (suggestion.endsWith("...")) {
             suggestion = suggestion.substring(0, suggestion.length() - 3).trim();
         }
@@ -287,11 +325,34 @@ public class ImprovedTextEditor extends JTextPane {
         }
     }
 
-    /* ========== Formatting ========== */
+    // --- Dirty-tracking and char counts ---
+    public boolean isDirty() {
+        return isDirty;
+    }
+    public void markClean() {
+        isDirty = false;
+    }
+    public int getAICharCount() {
+        return aiCharCount;
+    }
+    public int getHumanCharCount() {
+        return humanCharCount;
+    }
+    public void setAICharCount(int n) {
+        aiCharCount = n;
+    }
+    public void setHumanCharCount(int n) {
+        humanCharCount = n;
+    }
+    public void resetCharacterCounts() {
+        aiCharCount = 0;
+        humanCharCount = 0;
+    }
+
+    // --- Formatting methods ---
 
     /**
-     * We'll actually insert <h1> or <h2> tags around the selection or paragraph
-     * so that it gets saved as HTML headings.
+     * Insert <h1> or <h2> around the selected text (or paragraph).
      */
     public void setHeadingLevel(int level) {
         try {
@@ -300,7 +361,7 @@ public class ImprovedTextEditor extends JTextPane {
             int end = getSelectionEnd();
 
             if (start == end) {
-                // no selection => apply heading to current paragraph
+                // no selection => heading for entire paragraph
                 Element para = doc.getParagraphElement(start);
                 start = para.getStartOffset();
                 end = para.getEndOffset();
@@ -309,12 +370,8 @@ public class ImprovedTextEditor extends JTextPane {
             String selectedText = doc.getText(start, end - start);
             String tag = (level == 1) ? "h1" : "h2";
 
-            // remove the selection
             doc.remove(start, end - start);
 
-            // insert <h1>selected text</h1>
-            // note: insertHTML offsets can be tricky
-            // We'll pass the entire <hX> block as a snippet
             String html = "<" + tag + ">" + escapeHTML(selectedText) + "</" + tag + ">";
             ((HTMLEditorKit) getEditorKit()).insertHTML(doc, start, html, 0, 0, null);
             isDirty = true;
@@ -324,8 +381,7 @@ public class ImprovedTextEditor extends JTextPane {
     }
 
     /**
-     * Revert selected text or current paragraph to normal text by removing h1/h2 tags.
-     * We'll do this by removing them from the HTML.
+     * Revert selected text or the current paragraph to normal text (removing <h1> or <h2>).
      */
     public void setNormalText() {
         try {
@@ -339,16 +395,12 @@ public class ImprovedTextEditor extends JTextPane {
             }
             String selectedHTML = doc.getText(start, end - start);
 
-            // remove
             doc.remove(start, end - start);
 
-            // strip h1/h2 tags if present
             String replaced = selectedHTML
                     .replaceAll("(?i)</?h1>", "")
                     .replaceAll("(?i)</?h2>", "");
-            // keep the raw text or any inline <b>/<i> etc. alone
 
-            // insert as normal text (no heading tag)
             ((HTMLEditorKit) getEditorKit()).insertHTML(doc, start, escapeHTML(replaced), 0, 0, null);
             isDirty = true;
         } catch (Exception ex) {
@@ -356,18 +408,14 @@ public class ImprovedTextEditor extends JTextPane {
         }
     }
 
-    /**
-     * Basic HTML escaping
-     */
     private String escapeHTML(String str) {
         return str.replace("&", "&amp;")
                 .replace("<", "&lt;")
                 .replace(">", "&gt;");
     }
 
-    /**
-     * Applies bold/italic/underline inline for the selection or toggles if no selection
-     */
+    // B, I, U toggling
+
     public void applyBoldToSelectionOrToggle() {
         int start = getSelectionStart();
         int end = getSelectionEnd();
@@ -454,7 +502,8 @@ public class ImprovedTextEditor extends JTextPane {
     }
 
     /**
-     * If there's a selection, apply that font family to it. Else toggle future text style.
+     * If there's a selection, apply that font family to it.
+     * Else toggle future text style.
      */
     public void setFontFamily(String family) {
         isDirty = true;
@@ -470,6 +519,10 @@ public class ImprovedTextEditor extends JTextPane {
         }
     }
 
+    /**
+     * If there's a selection, apply that size to it.
+     * Else sets future text style.
+     */
     public void setFontSize(int size) {
         isDirty = true;
         int start = getSelectionStart();

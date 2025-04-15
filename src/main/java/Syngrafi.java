@@ -12,40 +12,34 @@ import api.OpenAIProvider;
 
 public class Syngrafi extends JFrame {
 
-    // UI Components
     private ImprovedTextEditor textEditor;
     private JLabel statusBar;
     private PreferencesManager preferencesManager;
     private APIProvider currentProvider;
     private File currentFile = null;
 
-    // We'll store a reference to the "Recent Files" menu
     private JMenu recentFilesMenu;
 
     public Syngrafi() {
         super("Syngrafi");
         preferencesManager = new PreferencesManager();
         initUI();
+        preferencesManager.loadPreferences();
     }
 
     private void initUI() {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setLayout(new BorderLayout(10,10));
 
-        // Create status bar
+        // Status bar
         statusBar = new JLabel("Ready");
         statusBar.setBorder(BorderFactory.createEmptyBorder(5,10,5,10));
         add(statusBar, BorderLayout.SOUTH);
 
-        // Create a left-hand sidebar
-        JPanel sidebar = new JPanel();
-        sidebar.setPreferredSize(new Dimension(200, 600));
-        sidebar.setLayout(new BorderLayout());
-        sidebar.setBorder(BorderFactory.createTitledBorder("Sidebar"));
-        JLabel placeholderLabel = new JLabel("<html><i>Reserved for future features...</i></html>");
-        placeholderLabel.setHorizontalAlignment(JLabel.CENTER);
-        sidebar.add(placeholderLabel, BorderLayout.CENTER);
-        add(sidebar, BorderLayout.WEST);
+        // A sidebar with advanced features (just placeholders / partial)
+        SidebarPanel sidebarPanel = new SidebarPanel(this);
+        sidebarPanel.setPreferredSize(new Dimension(250, 600));
+        add(sidebarPanel, BorderLayout.WEST);
 
         createMenuBar();
         createTopPanel();
@@ -75,7 +69,6 @@ public class Syngrafi extends JFrame {
         saveItem.addActionListener(e -> saveDocument());
         fileMenu.add(saveItem);
 
-        // We'll create the "Recent Files" menu as a sub-menu of File
         recentFilesMenu = new JMenu("Recent Files");
         updateRecentFilesMenu();
         fileMenu.add(recentFilesMenu);
@@ -86,7 +79,6 @@ public class Syngrafi extends JFrame {
 
         menuBar.add(fileMenu);
 
-        // Settings Menu
         JMenu settingsMenu = new JMenu("Settings");
         JMenuItem apiSettingsItem = new JMenuItem("API Settings");
         apiSettingsItem.addActionListener(e -> {
@@ -108,22 +100,6 @@ public class Syngrafi extends JFrame {
         setJMenuBar(menuBar);
     }
 
-    private void updateRecentFilesMenu() {
-        recentFilesMenu.removeAll();
-        for (String filePath : preferencesManager.getRecentFiles()) {
-            JMenuItem item = new JMenuItem(filePath);
-            item.addActionListener(e -> {
-                if (checkUnsavedChanges()) {
-                    currentFile = new File(filePath);
-                    openDocument(currentFile);
-                    preferencesManager.addRecentFile(currentFile.getAbsolutePath());
-                    updateRecentFilesMenu();
-                }
-            });
-            recentFilesMenu.add(item);
-        }
-    }
-
     private void createTopPanel() {
         JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
         topPanel.setBorder(BorderFactory.createEmptyBorder(5,5,5,5));
@@ -132,7 +108,6 @@ public class Syngrafi extends JFrame {
         JToolBar toolBar = new JToolBar();
         toolBar.setFloatable(false);
 
-        // B, I, U
         JButton boldButton = new JButton("B");
         boldButton.setFont(boldButton.getFont().deriveFont(Font.BOLD));
         boldButton.setToolTipText("Ctrl+B toggles bold");
@@ -150,7 +125,6 @@ public class Syngrafi extends JFrame {
         underlineButton.addActionListener(e -> textEditor.applyUnderlineToSelectionOrToggle());
         toolBar.add(underlineButton);
 
-        // Headings
         toolBar.addSeparator();
 
         JButton h1Button = new JButton("H1");
@@ -163,7 +137,6 @@ public class Syngrafi extends JFrame {
         h2Button.addActionListener(e -> textEditor.setHeadingLevel(2));
         toolBar.add(h2Button);
 
-        // Normal
         JButton normalButton = new JButton("Normal");
         normalButton.setToolTipText("Revert selection to normal text");
         normalButton.addActionListener(e -> textEditor.setNormalText());
@@ -171,7 +144,6 @@ public class Syngrafi extends JFrame {
 
         toolBar.addSeparator();
 
-        // Font family
         JLabel fontLabel = new JLabel("Font:");
         toolBar.add(fontLabel);
         JComboBox<String> fontCombo = new JComboBox<>(new String[]{"Serif","SansSerif","Monospaced"});
@@ -182,12 +154,11 @@ public class Syngrafi extends JFrame {
         });
         toolBar.add(fontCombo);
 
-        // Font size
         toolBar.addSeparator();
         JLabel sizeLabel = new JLabel("Size:");
         toolBar.add(sizeLabel);
         JComboBox<Integer> sizeCombo = new JComboBox<>(new Integer[]{12,14,16,18,24,36});
-        sizeCombo.setSelectedItem(12); // default normal 12
+        sizeCombo.setSelectedItem(12);
         sizeCombo.addActionListener(e -> {
             Integer chosenSize = (Integer) sizeCombo.getSelectedItem();
             textEditor.setFontSize(chosenSize);
@@ -196,7 +167,6 @@ public class Syngrafi extends JFrame {
 
         toolBar.addSeparator();
 
-        // Manual autocomplete button
         JButton manualAutocompleteButton = new JButton("Suggest (Ctrl+D)");
         manualAutocompleteButton.setToolTipText("Manually trigger autocomplete suggestions");
         manualAutocompleteButton.addActionListener(e -> textEditor.triggerAutocomplete());
@@ -208,14 +178,12 @@ public class Syngrafi extends JFrame {
 
     private void createEditorPanel() {
         textEditor = new ImprovedTextEditor(statusBar, preferencesManager);
-        // normal text is size=12
         textEditor.setFont(new Font("Serif", Font.PLAIN, 12));
 
         // Key bindings
         InputMap im = textEditor.getInputMap(JComponent.WHEN_FOCUSED);
         ActionMap am = textEditor.getActionMap();
 
-        // Ctrl+D => trigger suggestions
         KeyStroke ctrlD = KeyStroke.getKeyStroke("control D");
         im.put(ctrlD, "triggerAutocompleteImmediate");
         am.put("triggerAutocompleteImmediate", new AbstractAction() {
@@ -225,7 +193,7 @@ public class Syngrafi extends JFrame {
             }
         });
 
-        // Ctrl+1..Ctrl+9 => accept that suggestion
+        // Ctrl+1..9 => insert that suggestion
         for (int i = 1; i <= 9; i++) {
             final int suggestionIndex = i - 1;
             KeyStroke ks = KeyStroke.getKeyStroke("control " + i);
@@ -238,7 +206,7 @@ public class Syngrafi extends JFrame {
             });
         }
 
-        // Ctrl+B => Bold
+        // B, I, U
         KeyStroke ctrlB = KeyStroke.getKeyStroke("control B");
         im.put(ctrlB, "boldSelection");
         am.put("boldSelection", new AbstractAction() {
@@ -248,7 +216,6 @@ public class Syngrafi extends JFrame {
             }
         });
 
-        // Ctrl+I => Italic
         KeyStroke ctrlI = KeyStroke.getKeyStroke("control I");
         im.put(ctrlI, "italicSelection");
         am.put("italicSelection", new AbstractAction() {
@@ -258,7 +225,6 @@ public class Syngrafi extends JFrame {
             }
         });
 
-        // Ctrl+U => Underline
         KeyStroke ctrlU = KeyStroke.getKeyStroke("control U");
         im.put(ctrlU, "underlineSelection");
         am.put("underlineSelection", new AbstractAction() {
@@ -272,10 +238,13 @@ public class Syngrafi extends JFrame {
         add(scrollPane, BorderLayout.CENTER);
     }
 
+    public ImprovedTextEditor getTextEditor() {
+        return textEditor;
+    }
+
     /**
-     * Called by SettingsDialog to update the currentProvider.
-     * Also sets it in textEditor immediately so suggestions can work
-     * without needing to reopen settings.
+     * Called by SettingsDialog to update the currentProvider
+     * so suggestions can work immediately.
      */
     public void updateAPIProvider(String openAIKey, String geminiKey,
                                   String provider, String model) {
@@ -290,14 +259,27 @@ public class Syngrafi extends JFrame {
         statusBar.setText("Provider changed to " + provider + " | Model: " + model);
     }
 
-    private File getDefaultDirectory() {
+    File getDefaultDirectory() {
         String defPath = preferencesManager.getPreference("defaultPath", System.getProperty("user.dir"));
         return new File(defPath);
     }
 
-    /**
-     * Prompt to save if unsaved changes exist, then create new doc.
-     */
+    private void updateRecentFilesMenu() {
+        recentFilesMenu.removeAll();
+        for (String filePath : preferencesManager.getRecentFiles()) {
+            JMenuItem item = new JMenuItem(filePath);
+            item.addActionListener(e -> {
+                if (checkUnsavedChanges()) {
+                    currentFile = new File(filePath);
+                    openDocument(currentFile);
+                    preferencesManager.addRecentFile(currentFile.getAbsolutePath());
+                    updateRecentFilesMenu();
+                }
+            });
+            recentFilesMenu.add(item);
+        }
+    }
+
     private void handleNewDocument() {
         if (checkUnsavedChanges()) {
             newDocument();
@@ -307,13 +289,14 @@ public class Syngrafi extends JFrame {
     private void newDocument() {
         textEditor.resetCharacterCounts();
         textEditor.setText("");
+        textEditor.markClean();
         currentFile = null;
         statusBar.setText("New document created.");
     }
 
     private void handleOpenDocument() {
         if (!checkUnsavedChanges()) {
-            return; // user canceled
+            return;
         }
         JFileChooser chooser = new JFileChooser();
         chooser.setCurrentDirectory(getDefaultDirectory());
@@ -328,7 +311,6 @@ public class Syngrafi extends JFrame {
 
     /**
      * Return false if user chooses "Cancel" in the "Save changes?" dialog.
-     * Return true if user chooses "Yes" or "No".
      */
     private boolean checkUnsavedChanges() {
         if (textEditor.isDirty()) {
@@ -374,7 +356,6 @@ public class Syngrafi extends JFrame {
         textEditor.setAICharCount(aiChars);
         textEditor.setHumanCharCount(humanChars);
 
-        // Load the HTML into the editor
         textEditor.setText(entireText);
         textEditor.markClean();
 
