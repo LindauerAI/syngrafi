@@ -1,5 +1,4 @@
 import javax.swing.*;
-import javax.swing.text.*;
 import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
@@ -12,7 +11,7 @@ import api.OpenAIProvider;
 
 public class Syngrafi extends JFrame {
 
-    private ImprovedTextEditor textEditor;
+    private TextEditor textEditor;
     private JLabel statusBar;
     private PreferencesManager preferencesManager;
     private APIProvider currentProvider;
@@ -23,9 +22,17 @@ public class Syngrafi extends JFrame {
     public Syngrafi() {
         super("Syngrafi");
         preferencesManager = new PreferencesManager();
+
+        String openAIKey = preferencesManager.getPreference("apiKeyOpenAI", "");
+        String geminiKey = preferencesManager.getPreference("apiKeyGemini", "");
+        String provider = preferencesManager.getPreference("provider", "OpenAI");
+        String model = preferencesManager.getPreference("model",
+                provider.equals("OpenAI") ? "gpt-4o" : "gemini-2.0-flash");
         initUI();
+        updateAPIProvider(openAIKey, geminiKey, provider, model);
         preferencesManager.loadPreferences();
     }
+
 
     private void initUI() {
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
@@ -177,7 +184,7 @@ public class Syngrafi extends JFrame {
     }
 
     private void createEditorPanel() {
-        textEditor = new ImprovedTextEditor(statusBar, preferencesManager);
+        textEditor = new TextEditor(statusBar, preferencesManager);
         textEditor.setFont(new Font("Serif", Font.PLAIN, 12));
 
         // Key bindings
@@ -238,7 +245,7 @@ public class Syngrafi extends JFrame {
         add(scrollPane, BorderLayout.CENTER);
     }
 
-    public ImprovedTextEditor getTextEditor() {
+    public TextEditor getTextEditor() {
         return textEditor;
     }
 
@@ -364,6 +371,7 @@ public class Syngrafi extends JFrame {
     }
 
     public void saveDocument() {
+        // If a file is already open, save directly
         if (currentFile == null) {
             JFileChooser chooser = new JFileChooser();
             chooser.setCurrentDirectory(getDefaultDirectory());
@@ -378,6 +386,7 @@ public class Syngrafi extends JFrame {
             }
         }
 
+        // Save to the current file
         if (currentFile != null) {
             String textToSave = textEditor.getText();
             int aiCount = textEditor.getAICharCount();

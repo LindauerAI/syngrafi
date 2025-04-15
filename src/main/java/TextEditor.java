@@ -21,7 +21,7 @@ import java.util.concurrent.CompletableFuture;
  * Shift+Enter / Enter use the default HTMLEditorKit behavior.
  * If user presses Enter on a heading line, the next line becomes normal text.
  */
-public class ImprovedTextEditor extends JTextPane {
+public class TextEditor extends JTextPane {
     private final JLabel statusBar;
     private final PreferencesManager prefs;
     private APIProvider currentProvider;
@@ -38,7 +38,7 @@ public class ImprovedTextEditor extends JTextPane {
     // Track if doc has unsaved changes
     private boolean isDirty = false;
 
-    public ImprovedTextEditor(JLabel statusBar, PreferencesManager prefs) {
+    public TextEditor(JLabel statusBar, PreferencesManager prefs) {
         this.statusBar = statusBar;
         this.prefs = prefs;
 
@@ -54,6 +54,7 @@ public class ImprovedTextEditor extends JTextPane {
 
         setText("");
         autoCompletePopup = new JPopupMenu();
+        autoCompletePopup.setFocusable(false);
 
         setupDocumentListener();
         setupAutocompleteTimer();
@@ -169,12 +170,12 @@ public class ImprovedTextEditor extends JTextPane {
     private void scheduleAutocomplete() {
         if (isAutocompleteActive || currentProvider == null) return;
 
-        int delay = 1000;
+        int delay = 600;
         try {
-            delay = Integer.parseInt(prefs.getPreference("autocompleteDelay", "1000"));
-            if (delay < 0) delay = 1000;
+            delay = Integer.parseInt(prefs.getPreference("autocompleteDelay", "600"));
+            if (delay < 0) delay = 600;
         } catch (Exception ex) {
-            delay = 1000;
+            delay = 600;
         }
 
         autocompleteTimer.cancel();
@@ -280,12 +281,14 @@ public class ImprovedTextEditor extends JTextPane {
             if (s != null && !s.isEmpty()) {
                 validCount++;
                 final int idx = i;
-                JMenuItem item = new JMenuItem((i+1) + ") " + s);
+                JMenuItem item = new JMenuItem("ctrl+" + (i+1) + ") " + s);
+                item.setFocusable(false); // Ensure menu items do not steal focus
                 item.addActionListener(e -> insertSuggestionAtCaret(suggestions[idx]));
                 autoCompletePopup.add(item);
             }
         }
         if (validCount == 0) return;
+        // Display popup near caret
         try {
             int caretPos = getCaretPosition();
             Rectangle r = modelToView(caretPos);
@@ -296,6 +299,7 @@ public class ImprovedTextEditor extends JTextPane {
             ex.printStackTrace();
         }
     }
+
 
     public void insertSuggestionByIndex(int idx) {
         if (idx < 0 || idx >= currentSuggestions.length) return;

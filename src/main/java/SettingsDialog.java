@@ -80,7 +80,7 @@ public class SettingsDialog extends JDialog {
                 provider.equals("OpenAI") ? "gpt-4o" : "gemini-2.0-flash");
         String numSuggestions = preferencesManager.getPreference("numSuggestions", "3");
         String defaultPath = preferencesManager.getPreference("defaultPath", System.getProperty("user.dir"));
-        String delay = preferencesManager.getPreference("autocompleteDelay", "1000");
+        String delay = preferencesManager.getPreference("autocompleteDelay", "600");
 
         openAIKeyField.setText(openAIKey);
         geminiKeyField.setText(geminiKey);
@@ -127,12 +127,12 @@ public class SettingsDialog extends JDialog {
         }
 
         String delayVal = autocompleteDelayField.getText().trim();
-        int delay = 100;
+        int delay;
         try {
             delay = Integer.parseInt(delayVal);
-            if (delay < 0) delay = 100;
+            if (delay < 0) delay = 600;
         } catch (NumberFormatException ex) {
-            delay = 100;
+            delay = 600;
         }
 
         preferencesManager.setPreference("apiKeyOpenAI", openAIKey);
