@@ -17,6 +17,7 @@ import com.itextpdf.html2pdf.HtmlConverter;
 import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLightLaf;
 import com.formdev.flatlaf.util.SystemInfo;
+import java.awt.Toolkit;
 
 public class Syngrafi extends JFrame {
     private static final String VERSION = "1.0";
@@ -123,6 +124,11 @@ public class Syngrafi extends JFrame {
                         "for composition, rewriting, and content generation.",
                 "About Syngrafi", JOptionPane.INFORMATION_MESSAGE));
         helpMenu.add(aboutItem);
+
+        JMenuItem shortcutsItem = new JMenuItem("Keyboard Shortcuts");
+        shortcutsItem.addActionListener(e -> showHelpDialog());
+        helpMenu.add(shortcutsItem);
+
         menuBar.add(helpMenu);
 
         setJMenuBar(menuBar);
@@ -134,37 +140,38 @@ public class Syngrafi extends JFrame {
 
         JToolBar toolBar = new JToolBar();
         toolBar.setFloatable(false);
+        Insets buttonMargin = new Insets(2, 5, 2, 5); // Define a margin for buttons
 
         JButton normalButton = new JButton("Normal");
         normalButton.setToolTipText("Normal text");
         normalButton.addActionListener(e -> textEditor.setNormalText());
-        normalButton.setFocusable(false);
+        normalButton.setMargin(buttonMargin);
         toolBar.add(normalButton);
 
         JButton boldButton = new JButton("B");
         boldButton.setFont(boldButton.getFont().deriveFont(Font.BOLD));
         boldButton.setToolTipText("Ctrl+B toggles bold");
         boldButton.addActionListener(e -> textEditor.applyBoldToSelectionOrToggle());
-        boldButton.setFocusable(false);
+        boldButton.setMargin(buttonMargin);
         toolBar.add(boldButton);
 
         JButton italicButton = new JButton("I");
         italicButton.setFont(italicButton.getFont().deriveFont(Font.ITALIC));
         italicButton.setToolTipText("Ctrl+I toggles italic");
         italicButton.addActionListener(e -> textEditor.applyItalicToSelectionOrToggle());
-        italicButton.setFocusable(false);
+        italicButton.setMargin(buttonMargin);
         toolBar.add(italicButton);
 
         JButton underlineButton = new JButton("U");
         underlineButton.setToolTipText("Ctrl+U toggles underline");
         underlineButton.addActionListener(e -> textEditor.applyUnderlineToSelectionOrToggle());
-        underlineButton.setFocusable(false);
+        underlineButton.setMargin(buttonMargin);
         toolBar.add(underlineButton);
 
         JButton strikeButton = new JButton("S");
         strikeButton.setToolTipText("Strikethrough");
         strikeButton.addActionListener(e -> textEditor.applyStrikethrough());
-        strikeButton.setFocusable(false);
+        strikeButton.setMargin(buttonMargin);
         toolBar.add(strikeButton);
 
         toolBar.addSeparator();
@@ -172,26 +179,26 @@ public class Syngrafi extends JFrame {
         JButton h1Button = new JButton("H1");
         h1Button.setToolTipText("Heading 1");
         h1Button.addActionListener(e -> textEditor.setHeadingLevel(1));
-        h1Button.setFocusable(false);
+        h1Button.setMargin(buttonMargin);
         toolBar.add(h1Button);
 
         JButton h2Button = new JButton("H2");
         h2Button.setToolTipText("Heading 2");
         h2Button.addActionListener(e -> textEditor.setHeadingLevel(2));
-        h2Button.setFocusable(false);
+        h2Button.setMargin(buttonMargin);
         toolBar.add(h2Button);
         toolBar.addSeparator();
 
         JButton olButton = new JButton("OL");
         olButton.setToolTipText("Convert selection to numbered list");
         olButton.addActionListener(e -> textEditor.applyOrderedList());
-        olButton.setFocusable(false);
+        olButton.setMargin(buttonMargin);
         toolBar.add(olButton);
 
         JButton ulButton = new JButton("UL");
         ulButton.setToolTipText("Convert selection to bulleted list");
         ulButton.addActionListener(e -> textEditor.applyUnorderedList());
-        ulButton.setFocusable(false);
+        ulButton.setMargin(buttonMargin);
         toolBar.add(ulButton);
 
         toolBar.addSeparator();
@@ -199,19 +206,19 @@ public class Syngrafi extends JFrame {
         JButton alignLeftButton = new JButton("Left");
         alignLeftButton.addActionListener(e -> textEditor.applyAlignment(StyleConstants.ALIGN_LEFT));
         alignLeftButton.setToolTipText("Align left");
-        alignLeftButton.setFocusable(false);
+        alignLeftButton.setMargin(buttonMargin);
         toolBar.add(alignLeftButton);
 
         JButton alignCenterButton = new JButton("Center");
         alignCenterButton.addActionListener(e -> textEditor.applyAlignment(StyleConstants.ALIGN_CENTER));
         alignCenterButton.setToolTipText("Align center");
-        alignCenterButton.setFocusable(false);
+        alignCenterButton.setMargin(buttonMargin);
         toolBar.add(alignCenterButton);
 
         JButton alignRightButton = new JButton("Right");
         alignRightButton.addActionListener(e -> textEditor.applyAlignment(StyleConstants.ALIGN_RIGHT));
         alignRightButton.setToolTipText("Align right");
-        alignRightButton.setFocusable(false);
+        alignRightButton.setMargin(buttonMargin);
         toolBar.add(alignRightButton);
 
         toolBar.addSeparator();
@@ -453,9 +460,9 @@ public class Syngrafi extends JFrame {
                 created = Long.parseLong(m.group(3));
                 lastEdit = Long.parseLong(m.group(4));
                 version = m.group(5);
-            } catch (NumberFormatException ignored) {
+            } catch (NumberFormatException | IndexOutOfBoundsException ignored) {
             }
-            entireText = m.replaceFirst("");
+            entireText = m.replaceFirst("").trim();
         }
         textEditor.setAICharCount(aiChars);
         textEditor.setHumanCharCount(humanChars);
@@ -494,12 +501,21 @@ public class Syngrafi extends JFrame {
 
             int aiCount = textEditor.getAICharCount();
             int humanCount = textEditor.getHumanCharCount();
-            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-            textToSave += "\n<!-- AI_CHARS=" + aiCount +
-                    " HUMAN_CHARS=" + humanCount +
-                    " CREATED=" + creationTimestamp +
-                    " LAST_EDIT=" + lastEditTimestamp +
-                    " VERSION=" + VERSION + " -->\n";
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
+            String createdDate = sdf.format(new Date(creationTimestamp));
+            String updatedDate = sdf.format(new Date(lastEditTimestamp));
+
+            String metadata = String.format("<!-- " +
+                    "AI_CHARS=%d HUMAN_CHARS=%d " +
+                    "CREATED_TIMESTAMP=%d LAST_EDIT_TIMESTAMP=%d " +
+                    "CREATED_DATE=\"%s\" LAST_UPDATED_DATE=\"%s\" " +
+                    "VERSION=%s -->",
+                    aiCount, humanCount,
+                    creationTimestamp, lastEditTimestamp,
+                    createdDate, updatedDate,
+                    VERSION);
+
+            textToSave += "\n" + metadata + "\n";
 
             int wordCount = countWordsFromHTML(textToSave);
 
@@ -600,37 +616,49 @@ public class Syngrafi extends JFrame {
         }
     }
 
+    // Method to show the help dialog
+    private void showHelpDialog() {
+        HelpDialog helpDialog = new HelpDialog(this);
+        helpDialog.setVisible(true);
+    }
+
     public static void main(String[] args) {
-        // Setup FlatLaf theme based on preferences
         PreferencesManager prefs = new PreferencesManager();
         prefs.loadPreferences();
         String themePref = prefs.getPreference("theme", "System");
 
-        boolean useDark;
+        boolean useDark = false;
         if ("Dark".equals(themePref)) {
             useDark = true;
-        } else if ("Light".equals(themePref)) {
-            useDark = false;
-        } else { // "System"
-            // Detect system theme
-            if (SystemInfo.isWindows) {
-                useDark = SystemInfo.isWinSystemAppsUseDarkTheme();
-            } else if (SystemInfo.isMac) {
-                useDark = SystemInfo.isMacSystemDarkTheme();
-            } else { // Linux/Other - Default to light if detection fails
+        } else if ("System".equals(themePref)) {
+            // Basic system detection (macOS example, default Light otherwise)
+            String osName = System.getProperty("os.name").toLowerCase();
+            if (osName.contains("mac")) {
+                try {
+                    // This property exists on macOS to check for Dark Mode
+                    String uiTheme = (String) Toolkit.getDefaultToolkit().getDesktopProperty("apple.awt.userInterfaceTheme");
+                    useDark = "Dark".equalsIgnoreCase(uiTheme);
+                } catch (Exception e) {
+                    System.err.println("Could not detect macOS theme, defaulting to Light.");
+                    useDark = false; // Default to light on error
+                }
+            } else {
+                // Default to Light theme for System on non-Mac OS for simplicity.
+                // FlatLaf might have more sophisticated internal detection depending on version/OS.
                 useDark = false;
             }
-        }
+        } // else themePref is "Light" or invalid, useDark remains false (Light theme)
 
+        // Apply the determined theme using setup() for better initialization
         try {
             if (useDark) {
-                UIManager.setLookAndFeel(new FlatDarkLaf());
+                FlatDarkLaf.setup();
             } else {
-                UIManager.setLookAndFeel(new FlatLightLaf());
+                FlatLightLaf.setup();
             }
-        } catch (UnsupportedLookAndFeelException e) {
+        } catch (Exception e) {
             System.err.println("Failed to initialize FlatLaf theme: " + e.getMessage());
-            // Continue with default L&F
+            // Continue with default L&F if FlatLaf fails
         }
 
         SwingUtilities.invokeLater(() -> {

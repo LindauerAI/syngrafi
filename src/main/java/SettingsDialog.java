@@ -13,10 +13,16 @@ public class SettingsDialog extends JDialog {
     private JTextField numSuggestionsField;
     private JTextField defaultPathField;
     private JTextField autocompleteDelayField;
+    private JComboBox<String> themeComboBox;
 
     // Autocomplete tab panel
     private JPanel autocompletePanel;
     private JScrollPane autocompleteScroll;
+
+    // AI Settings tab components
+    private JTextArea generalStylePromptArea;
+    private JTextField maxLengthField;
+    private String initialThemeValue; // Store initial theme value
 
     public SettingsDialog(JFrame parent, PreferencesManager preferencesManager) {
         super(parent, "Settings", true);
@@ -33,6 +39,10 @@ public class SettingsDialog extends JDialog {
         autocompletePanel.setLayout(new BoxLayout(autocompletePanel, BoxLayout.Y_AXIS));
         autocompleteScroll = new JScrollPane(autocompletePanel);
         tabbedPane.addTab("Autocomplete", autocompleteScroll);
+
+        // Add AI Settings Tab
+        JPanel aiSettingsTab = createAISettingsTab();
+        tabbedPane.addTab("AI Settings", aiSettingsTab);
 
         add(tabbedPane, BorderLayout.CENTER);
 
@@ -108,6 +118,11 @@ public class SettingsDialog extends JDialog {
         autocompleteDelayField = new JTextField(6);
         panel.add(autocompleteDelayField);
 
+        // Theme selection
+        panel.add(new JLabel("Theme:"));
+        themeComboBox = new JComboBox<>(new String[]{"System", "Light", "Dark"});
+        panel.add(themeComboBox);
+
         providerComboBox.addActionListener(e -> updateModelComboBox());
         return panel;
     }
@@ -134,6 +149,9 @@ public class SettingsDialog extends JDialog {
         String numSuggestions = preferencesManager.getPreference("numSuggestions", "3");
         String defaultPath = preferencesManager.getPreference("defaultPath", System.getProperty("user.dir"));
         String delay = preferencesManager.getPreference("autocompleteDelay", "600");
+        String theme = preferencesManager.getPreference("theme", "System");
+        String stylePrompt = preferencesManager.getPreference("generalStylePrompt", "");
+        String maxLength = preferencesManager.getPreference("autocompleteMaxLength", "100");
 
         openAIKeyField.setText(openAIKey);
         geminiKeyField.setText(geminiKey);
@@ -143,6 +161,10 @@ public class SettingsDialog extends JDialog {
         numSuggestionsField.setText(numSuggestions);
         defaultPathField.setText(defaultPath);
         autocompleteDelayField.setText(delay);
+        themeComboBox.setSelectedItem(theme);
+        generalStylePromptArea.setText(stylePrompt);
+        maxLengthField.setText(maxLength);
+        initialThemeValue = theme; // Store the initially loaded theme
     }
 
     /**
@@ -224,6 +246,8 @@ public class SettingsDialog extends JDialog {
             delay = 600;
         }
 
+        String theme = (String) themeComboBox.getSelectedItem();
+
         preferencesManager.setPreference("apiKeyOpenAI", openAIKey);
         preferencesManager.setPreference("apiKeyGemini", geminiKey);
         preferencesManager.setPreference("provider", provider);
@@ -231,6 +255,20 @@ public class SettingsDialog extends JDialog {
         preferencesManager.setPreference("numSuggestions", String.valueOf(n));
         preferencesManager.setPreference("defaultPath", defaultPath);
         preferencesManager.setPreference("autocompleteDelay", String.valueOf(delay));
+        preferencesManager.setPreference("theme", theme);
+        preferencesManager.setPreference("generalStylePrompt", generalStylePromptArea.getText().trim());
+
+        // Validate and save max length
+        String maxLengthStr = maxLengthField.getText().trim();
+        int maxLengthVal = 100; // default
+        try {
+            maxLengthVal = Integer.parseInt(maxLengthStr);
+            if (maxLengthVal < 10) maxLengthVal = 10; // Ensure a minimum reasonable length
+            if (maxLengthVal > 1000) maxLengthVal = 1000; // Set a reasonable upper limit
+        } catch (NumberFormatException ex) {
+            // Keep default if input is invalid
+        }
+        preferencesManager.setPreference("autocompleteMaxLength", String.valueOf(maxLengthVal)); // Save max length
 
         // Save user-defined prompts from the Autocomplete tab
         Component[] rows = autocompletePanel.getComponents();
@@ -254,7 +292,18 @@ public class SettingsDialog extends JDialog {
 
         preferencesManager.savePreferences();
 
-        // Update the main frame’s API provider in case keys or model changed
+        // --- Theme Change Check ---
+        String newTheme = (String) themeComboBox.getSelectedItem();
+        if (initialThemeValue != null && !initialThemeValue.equals(newTheme)) {
+            JOptionPane.showMessageDialog(this,
+                "Theme changes will take effect after restarting Syngrafi.",
+                "Restart Required",
+                JOptionPane.INFORMATION_MESSAGE);
+            initialThemeValue = newTheme; // Update initial value to prevent re-prompting unless changed again
+        }
+        // --- End Theme Change Check ---
+
+        // Update the main frame's API provider in case keys or model changed
         if (getParent() instanceof Syngrafi) {
             ((Syngrafi) getParent()).updateAPIProvider(openAIKey, geminiKey, provider, model);
         }
@@ -262,6 +311,28 @@ public class SettingsDialog extends JDialog {
         if (disposeAfter) {
             dispose();
         }
+    }
+
+    private JPanel createAISettingsTab() {
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        panel.add(new JLabel("General Style Prompt (optional):"), BorderLayout.NORTH);
+
+        generalStylePromptArea = new JTextArea(5, 40);
+        generalStylePromptArea.setLineWrap(true);
+        generalStylePromptArea.setWrapStyleWord(true);
+        JScrollPane scrollPane = new JScrollPane(generalStylePromptArea);
+        panel.add(scrollPane, BorderLayout.CENTER);
+
+        // Add max length setting
+        JPanel bottomAISettings = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        bottomAISettings.add(new JLabel("Max Suggestion Length (chars):"));
+        maxLengthField = new JTextField(5);
+        bottomAISettings.add(maxLengthField);
+        panel.add(bottomAISettings, BorderLayout.SOUTH);
+
+        return panel;
     }
 
 }
