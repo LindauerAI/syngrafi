@@ -42,6 +42,8 @@ public class TextEditor extends JTextPane {
 
     // Track if doc has unsaved changes
     private boolean isDirty = false;
+    private int activeHeadingLevel = 0;
+
 
     public TextEditor(JLabel statusBar, PreferencesManager prefs) {
         this.statusBar = statusBar;
@@ -104,15 +106,23 @@ public class TextEditor extends JTextPane {
     protected void processKeyEvent(KeyEvent e) {
         super.processKeyEvent(e);
 
-        // After the default Enter is inserted, check if we were in a heading
         if (e.getID() == KeyEvent.KEY_PRESSED && e.getKeyCode() == KeyEvent.VK_ENTER) {
-            SwingUtilities.invokeLater(() -> {
-                if (isCaretInHeading()) {
-                    setNormalText();
-                }
-            });
+            if (activeHeadingLevel != 0) {
+                // Allow the Enter key to insert a newline, then exit heading mode
+                SwingUtilities.invokeLater(() -> {
+                    revertHeadingMode();
+                });
+            } else {
+                // (Optional) You can also preserve the existing behavior for actual <h1>/<h2> tags:
+                SwingUtilities.invokeLater(() -> {
+                    if (isCaretInHeading()) {
+                        setNormalText();
+                    }
+                });
+            }
         }
     }
+
 
 
     public void setAPIProvider(APIProvider provider) {
@@ -471,30 +481,57 @@ public class TextEditor extends JTextPane {
      * Insert <h1> or <h2> around the selected text (or paragraph).
      */
     public void setHeadingLevel(int level) {
-        try {
-            HTMLDocument doc = (HTMLDocument) getDocument();
-            int start = getSelectionStart();
-            int end = getSelectionEnd();
+        int start = getSelectionStart();
+        int end = getSelectionEnd();
 
-            if (start == end) {
-                // no selection => heading for entire paragraph
-                Element para = doc.getParagraphElement(start);
-                start = para.getStartOffset();
-                end = para.getEndOffset();
+        if (start == end) {
+            // No text selected: toggle heading mode
+            if (activeHeadingLevel == level) {
+                // Already in this heading mode; toggle it off
+                revertHeadingMode();
+            } else {
+                // Enable heading mode for the given level:
+                activeHeadingLevel = level;
+                MutableAttributeSet attrs = new SimpleAttributeSet();
+                if (level == 1) {
+                    // For H1, use a larger font size (for example, 24pt)
+                    StyleConstants.setFontSize(attrs, 24);
+                } else if (level == 2) {
+                    // For H2, for example 18pt
+                    StyleConstants.setFontSize(attrs, 18);
+                }
+                // Optionally, you can also set a specific font family or make the text bold
+                // Set these as the attributes for new text insertion:
+                setCharacterAttributes(attrs, false);
+                statusBar.setText("Heading mode H" + level + " enabled. Continue typing; press Enter to end heading mode.");
             }
-
-            String selectedText = doc.getText(start, end - start);
-            String tag = (level == 1) ? "h1" : "h2";
-
-            doc.remove(start, end - start);
-
-            String html = "<" + tag + ">" + escapeHTML(selectedText) + "</" + tag + ">";
-            ((HTMLEditorKit) getEditorKit()).insertHTML(doc, start, html, 0, 0, null);
-            isDirty = true;
-        } catch (Exception ex) {
-            ex.printStackTrace();
+        } else {
+            // If text is selected, perform the current behavior: wrap text in <h1> or <h2>
+            try {
+                HTMLDocument doc = (HTMLDocument) getDocument();
+                String selectedText = doc.getText(start, end - start);
+                String tag = (level == 1) ? "h1" : "h2";
+                doc.remove(start, end - start);
+                String html = "<" + tag + ">" + escapeHTML(selectedText) + "</" + tag + ">";
+                ((HTMLEditorKit) getEditorKit()).insertHTML(doc, start, html, 0, 0, null);
+                activeHeadingLevel = 0;
+                statusBar.setText("Applied heading to selected text.");
+                isDirty = true;
+            } catch (Exception ex) {
+                ex.printStackTrace();
+            }
         }
     }
+    private void revertHeadingMode() {
+        activeHeadingLevel = 0;
+        // Reset to normal text attributes (for example, Serif 12pt)
+        MutableAttributeSet attrs = new SimpleAttributeSet();
+        StyleConstants.setFontFamily(attrs, "Serif");
+        StyleConstants.setFontSize(attrs, 12);
+        setCharacterAttributes(attrs, true);
+        statusBar.setText("Normal text mode enabled.");
+    }
+
 
     /**
      * Revert selected text or the current paragraph to normal text (removing <h1> or <h2>).

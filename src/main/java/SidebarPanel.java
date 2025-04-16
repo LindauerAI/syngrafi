@@ -127,7 +127,7 @@ public class SidebarPanel extends JPanel {
                         if (userObject instanceof File) {
                             File file = (File) userObject;
                             if (file.isFile() && file.getName().toLowerCase().endsWith(".html")) {
-                                parentFrame.openDocument(file);
+                                parentFrame.publicHandleOpenDocument(file);
                             }
                         }
                     }

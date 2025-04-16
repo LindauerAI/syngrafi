@@ -43,7 +43,17 @@ public class Syngrafi extends JFrame {
     }
 
     private void initUI() {
-        setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
+        setDefaultCloseOperation(JFrame.DO_NOTHING_ON_CLOSE);
+        addWindowListener(new WindowAdapter() {
+            @Override
+            public void windowClosing(WindowEvent e) {
+                if (checkUnsavedChanges()) {
+                    // Optionally call dispose() and exit
+                    dispose();
+                    System.exit(0);
+                }
+            }
+        });
         setLayout(new BorderLayout(10, 10));
 
         createMenuBar();
@@ -395,6 +405,16 @@ public class Syngrafi extends JFrame {
             preferencesManager.addRecentFile(currentFile.getAbsolutePath());
             updateRecentFilesMenu();
         }
+    }
+
+    public void publicHandleOpenDocument(File file) {
+        if (!checkUnsavedChanges()) {
+            return;
+        }
+        currentFile = file;
+        openDocument(currentFile);
+        preferencesManager.addRecentFile(currentFile.getAbsolutePath());
+        updateRecentFilesMenu();
     }
 
     /**
