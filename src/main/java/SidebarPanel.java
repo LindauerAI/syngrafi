@@ -331,10 +331,11 @@ public class SidebarPanel extends JPanel {
                         try {
                             String headingText = htmlDoc.getText(start, end - start).trim();
                             headingOffsets.add(start);
+                            // For H1, no indentation; for H2, indent with four spaces.
                             if (tag == HTML.Tag.H1) {
-                                headingListModel.addElement("H1: " + headingText);
+                                headingListModel.addElement(headingText);
                             } else {
-                                headingListModel.addElement("H2: " + headingText);
+                                headingListModel.addElement("    " + headingText);
                             }
                         } catch (BadLocationException ex) {
                             ex.printStackTrace();

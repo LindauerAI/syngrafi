@@ -6,6 +6,9 @@ import javax.swing.text.*;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 import javax.swing.text.html.StyleSheet;
+import javax.swing.undo.CannotRedoException;
+import javax.swing.undo.CannotUndoException;
+import javax.swing.undo.UndoManager;
 import java.awt.*;
 import java.awt.event.KeyAdapter;
 import java.awt.event.KeyEvent;
@@ -17,7 +20,7 @@ import java.util.concurrent.CompletableFuture;
  * A text editor that uses HTMLEditorKit for formatting,
  * tracks AI/Human character counts, supports toggles for bold/italic/underline,
  * headings (h1/h2) in actual HTML tags, and an adjustable autocomplete timer.
- *
+ * <p>
  * Shift+Enter / Enter use the default HTMLEditorKit behavior.
  * If user presses Enter on a heading line, the next line becomes normal text.
  */
@@ -25,6 +28,8 @@ public class TextEditor extends JTextPane {
     private final JLabel statusBar;
     private final PreferencesManager prefs;
     private APIProvider currentProvider;
+    private UndoManager undoManager = new UndoManager();
+
 
     private Timer autocompleteTimer;
     private boolean isAutocompleteActive = false;
@@ -49,12 +54,16 @@ public class TextEditor extends JTextPane {
         // Provide some default style for headings, normal text
         StyleSheet styles = kit.getStyleSheet();
         styles.addRule("body { font-size: 12pt; font-family: Serif; }");
+        styles.addRule("ul, ol { margin-left: 20px; padding-left: 20px; }");
+        styles.addRule("li { margin-left: 0; }");
         styles.addRule("h1 { font-size: 24pt; }");
         styles.addRule("h2 { font-size: 18pt; }");
 
         setText("");
         autoCompletePopup = new JPopupMenu();
         autoCompletePopup.setFocusable(false);
+
+        getDocument().addUndoableEditListener(e -> undoManager.addEdit(e.getEdit()));
 
         setupDocumentListener();
         setupAutocompleteTimer();
@@ -65,6 +74,28 @@ public class TextEditor extends JTextPane {
         // but we do intercept 'Enter' in processKeyEvent to see if user is in a heading.
     }
 
+    // Undo helper method
+    public void undo() {
+        try {
+            if (undoManager.canUndo()) {
+                undoManager.undo();
+            }
+        } catch (CannotUndoException ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    // Redo helper method
+    public void redo() {
+        try {
+            if (undoManager.canRedo()) {
+                undoManager.redo();
+            }
+        } catch (CannotRedoException ex) {
+            ex.printStackTrace();
+        }
+    }
+
     /**
      * We override processKeyEvent so that after user presses Enter
      * on a heading line, we set them to normal text for the next line.
@@ -73,14 +104,16 @@ public class TextEditor extends JTextPane {
     protected void processKeyEvent(KeyEvent e) {
         super.processKeyEvent(e);
 
-        // If the user just pressed Enter, check if caret is inside <h1>/<h2>
+        // After the default Enter is inserted, check if we were in a heading
         if (e.getID() == KeyEvent.KEY_PRESSED && e.getKeyCode() == KeyEvent.VK_ENTER) {
-            if (isCaretInHeading()) {
-                // On next event cycle, revert to normal text
-                SwingUtilities.invokeLater(this::setNormalText);
-            }
+            SwingUtilities.invokeLater(() -> {
+                if (isCaretInHeading()) {
+                    setNormalText();
+                }
+            });
         }
     }
+
 
     public void setAPIProvider(APIProvider provider) {
         this.currentProvider = provider;
@@ -123,11 +156,13 @@ public class TextEditor extends JTextPane {
                 isDirty = true;
                 scheduleAutocomplete();
             }
+
             @Override
             public void removeUpdate(DocumentEvent e) {
                 isDirty = true;
                 scheduleAutocomplete();
             }
+
             @Override
             public void changedUpdate(DocumentEvent e) {
                 isDirty = true;
@@ -189,6 +224,44 @@ public class TextEditor extends JTextPane {
         }, delay);
     }
 
+    /**
+     * Removes leading/trailing ellipses and inserts a space if needed.
+     */
+    private String cleanupSuggestion(String contextText, String suggestion) {
+        // 1) Trim leading/trailing whitespace
+        suggestion = suggestion.trim();
+
+        // 2) Remove leading/trailing "..."
+        while (suggestion.startsWith("...")) {
+            suggestion = suggestion.substring(3).trim();
+        }
+        while (suggestion.endsWith("...")) {
+            suggestion = suggestion.substring(0, suggestion.length() - 3).trim();
+        }
+
+        // 3) If contextText ends with punctuation and suggestion does not start with a space, add one.
+        if (!contextText.isEmpty()) {
+            char lastChar = contextText.charAt(contextText.length() - 1);
+            if (lastChar == '.' || lastChar == '?' || lastChar == '!') {
+                if (!suggestion.startsWith(" ")) {
+                    suggestion = " " + suggestion;
+                }
+            }
+        }
+        return suggestion;
+    }
+
+    public void cancelAutoComplete() {
+        autocompleteTimer.cancel();
+        autocompleteTimer = new Timer("AutocompleteTimer", true);
+        isAutocompleteActive = false;
+
+        if (autoCompletePopup.isVisible()) {
+            autoCompletePopup.setVisible(false);
+        }
+    }
+
+
     public void triggerAutocomplete() {
         if (currentProvider == null || isAutocompleteActive) return;
         String contextText = getPlainText();
@@ -196,16 +269,28 @@ public class TextEditor extends JTextPane {
             return; // skip if doc is too short
         }
 
-        loadNumSuggestions();
+        // Re-load how many suggestions we have
+        int n = 3;
+        try {
+            n = Integer.parseInt(prefs.getPreference("numSuggestions", "3"));
+            if (n < 1) n = 1;
+            if (n > 10) n = 10;
+        } catch (Exception ex) {
+            n = 3;
+        }
+
+        currentSuggestions = new String[n];
         isAutocompleteActive = true;
         statusBar.setText("Generating suggestions...");
 
-        CompletableFuture<String>[] futures = new CompletableFuture[currentSuggestions.length];
-        for (int i = 0; i < currentSuggestions.length; i++) {
-            final int variation = (i % 3) + 1;
+        // Kick off parallel tasks
+        @SuppressWarnings("unchecked")
+        CompletableFuture<String>[] futures = new CompletableFuture[n];
+        for (int i = 0; i < n; i++) {
+            final int variation = i + 1; // 1-based
             futures[i] = CompletableFuture.supplyAsync(() -> {
                 try {
-                    String prompt = AutocompletePromptManager.getPrompt(contextText, variation);
+                    String prompt = AutocompletePromptManager.getPrompt(contextText, variation, prefs);
                     return currentProvider.generateCompletion(prompt);
                 } catch (Exception ex) {
                     ex.printStackTrace();
@@ -214,11 +299,13 @@ public class TextEditor extends JTextPane {
             });
         }
 
+        int finalN = n;
         CompletableFuture.allOf(futures).thenRun(() -> {
             try {
-                for (int i = 0; i < futures.length; i++) {
+                for (int i = 0; i < finalN; i++) {
                     String raw = futures[i].get().trim();
                     raw = cleanOverlap(contextText, raw);
+                    raw = cleanupSuggestion(contextText, raw);
                     currentSuggestions[i] = raw;
                 }
             } catch (Exception ex) {
@@ -231,6 +318,7 @@ public class TextEditor extends JTextPane {
             });
         });
     }
+
 
     private String getPlainText() {
         try {
@@ -281,7 +369,7 @@ public class TextEditor extends JTextPane {
             if (s != null && !s.isEmpty()) {
                 validCount++;
                 final int idx = i;
-                JMenuItem item = new JMenuItem("ctrl+" + (i+1) + ") " + s);
+                JMenuItem item = new JMenuItem("ctrl+" + (i + 1) + ") " + s);
                 item.setFocusable(false); // Ensure menu items do not steal focus
                 item.addActionListener(e -> insertSuggestionAtCaret(suggestions[idx]));
                 autoCompletePopup.add(item);
@@ -311,17 +399,34 @@ public class TextEditor extends JTextPane {
 
     public void insertSuggestionAtCaret(String suggestion) {
         if (suggestion == null || suggestion.isEmpty()) return;
+
         int caretPos = getCaretPosition();
+        StyledDocument sdoc = (StyledDocument) getDocument();
+
+        // Use the previous character’s attributes if possible:
+        AttributeSet insertionAttrs;
+        if (caretPos > 0) {
+            Element charElem = sdoc.getCharacterElement(caretPos - 1);
+            insertionAttrs = charElem.getAttributes();
+        } else {
+            // Fallback if we're at position 0
+            insertionAttrs = getCharacterAttributes();
+        }
+
+        SimpleAttributeSet attrs = new SimpleAttributeSet(insertionAttrs);
+
         try {
-            AttributeSet attrs = getCharacterAttributes();
-            getDocument().insertString(caretPos, suggestion, attrs);
+            sdoc.insertString(caretPos, suggestion, attrs);
+
             aiCharCount += suggestion.length();
             setCaretPosition(caretPos + suggestion.length());
+
+            // Close the popup
             if (autoCompletePopup.isVisible()) {
                 autoCompletePopup.setVisible(false);
             }
-            statusBar.setText("Suggestion inserted. AI chars: "
-                    + aiCharCount + " / Human chars: " + humanCharCount);
+            statusBar.setText("Suggestion inserted. AI chars: " + aiCharCount
+                    + " / Human chars: " + humanCharCount);
             isDirty = true;
         } catch (BadLocationException ex) {
             ex.printStackTrace();
@@ -329,25 +434,32 @@ public class TextEditor extends JTextPane {
         }
     }
 
+
     // --- Dirty-tracking and char counts ---
     public boolean isDirty() {
         return isDirty;
     }
+
     public void markClean() {
         isDirty = false;
     }
+
     public int getAICharCount() {
         return aiCharCount;
     }
+
     public int getHumanCharCount() {
         return humanCharCount;
     }
+
     public void setAICharCount(int n) {
         aiCharCount = n;
     }
+
     public void setHumanCharCount(int n) {
         humanCharCount = n;
     }
+
     public void resetCharacterCounts() {
         aiCharCount = 0;
         humanCharCount = 0;
@@ -412,12 +524,6 @@ public class TextEditor extends JTextPane {
         }
     }
 
-    private String escapeHTML(String str) {
-        return str.replace("&", "&amp;")
-                .replace("<", "&lt;")
-                .replace(">", "&gt;");
-    }
-
     // B, I, U toggling
 
     public void applyBoldToSelectionOrToggle() {
@@ -450,43 +556,12 @@ public class TextEditor extends JTextPane {
         }
     }
 
-    private void toggleOrApplyAttributeOnSelection(int start, int end, String attrType) {
-        isDirty = true;
-        StyledDocument sdoc = (StyledDocument) getDocument();
-        boolean allSet = true;
-
-        for (int pos = start; pos < end; pos++) {
-            Element el = sdoc.getCharacterElement(pos);
-            AttributeSet as = el.getAttributes();
-            if ("bold".equals(attrType) && !StyleConstants.isBold(as)) {
-                allSet = false; break;
-            }
-            if ("italic".equals(attrType) && !StyleConstants.isItalic(as)) {
-                allSet = false; break;
-            }
-            if ("underline".equals(attrType) && !StyleConstants.isUnderline(as)) {
-                allSet = false; break;
-            }
-        }
-
-        MutableAttributeSet newAttr = new SimpleAttributeSet();
-        if ("bold".equals(attrType)) {
-            StyleConstants.setBold(newAttr, !allSet);
-        } else if ("italic".equals(attrType)) {
-            StyleConstants.setItalic(newAttr, !allSet);
-        } else if ("underline".equals(attrType)) {
-            StyleConstants.setUnderline(newAttr, !allSet);
-        }
-
-        sdoc.setCharacterAttributes(start, end - start, newAttr, false);
-    }
-
     private void toggleBold() {
         isDirty = true;
         MutableAttributeSet attr = new SimpleAttributeSet(getInputAttributes());
         boolean isBold = StyleConstants.isBold(attr);
         StyleConstants.setBold(attr, !isBold);
-        setCharacterAttributes(attr, false);
+        setCharacterAttributes(attr, true);
     }
 
     private void toggleItalic() {
@@ -494,7 +569,7 @@ public class TextEditor extends JTextPane {
         MutableAttributeSet attr = new SimpleAttributeSet(getInputAttributes());
         boolean isItalic = StyleConstants.isItalic(attr);
         StyleConstants.setItalic(attr, !isItalic);
-        setCharacterAttributes(attr, false);
+        setCharacterAttributes(attr, true);
     }
 
     private void toggleUnderline() {
@@ -502,7 +577,7 @@ public class TextEditor extends JTextPane {
         MutableAttributeSet attr = new SimpleAttributeSet(getInputAttributes());
         boolean isUnderline = StyleConstants.isUnderline(attr);
         StyleConstants.setUnderline(attr, !isUnderline);
-        setCharacterAttributes(attr, false);
+        setCharacterAttributes(attr, true);
     }
 
     /**
@@ -540,4 +615,179 @@ public class TextEditor extends JTextPane {
             setCharacterAttributes(attr, false);
         }
     }
+
+    // Strikethrough
+    public void applyStrikethrough() {
+        int start = getSelectionStart();
+        int end = getSelectionEnd();
+        if (start < end) {
+            toggleOrApplyAttributeOnSelection(start, end, "strikethrough");
+        } else {
+            toggleStrikethrough();
+        }
+    }
+
+    private void toggleStrikethrough() {
+        isDirty = true;
+        MutableAttributeSet attr = new SimpleAttributeSet(getInputAttributes());
+        boolean isStrike = StyleConstants.isStrikeThrough(attr);
+        StyleConstants.setStrikeThrough(attr, !isStrike);
+        setCharacterAttributes(attr, true);
+    }
+
+    /**
+     * Convert selected lines to ordered list (<ol><li>...).
+     * If there's no selection, apply to the current paragraph.
+     */
+    public void applyOrderedList() {
+        try {
+            HTMLDocument doc = (HTMLDocument) getDocument();
+            int start = getSelectionStart();
+            int end = getSelectionEnd();
+            if (start == end) {
+                // no selection => entire paragraph
+                Element para = doc.getParagraphElement(start);
+                start = para.getStartOffset();
+                end = para.getEndOffset();
+            }
+
+            String selectedText = doc.getText(start, end - start);
+            // Remove from doc
+            doc.remove(start, end - start);
+
+            // Wrap in <ol><li>...</li></ol>
+            String[] lines = selectedText.split("\n");
+            StringBuilder sb = new StringBuilder("<ol>");
+            for (String line : lines) {
+                line = escapeHTML(line).trim();
+                if (!line.isEmpty()) {
+                    sb.append("<li>").append(line).append("</li>");
+                }
+            }
+            sb.append("</ol>");
+
+            ((HTMLEditorKit) getEditorKit()).insertHTML(doc, start, sb.toString(), 0, 0, null);
+            isDirty = true;
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    /**
+     * Convert selected lines to unordered list (<ul><li>...).
+     * If no selection, apply to current paragraph.
+     */
+    public void applyUnorderedList() {
+        try {
+            HTMLDocument doc = (HTMLDocument) getDocument();
+            int start = getSelectionStart();
+            int end = getSelectionEnd();
+            if (start == end) {
+                // no selection => entire paragraph
+                Element para = doc.getParagraphElement(start);
+                start = para.getStartOffset();
+                end = para.getEndOffset();
+            }
+
+            String selectedText = doc.getText(start, end - start);
+            // Remove from doc
+            doc.remove(start, end - start);
+
+            // Wrap in <ul><li>...</li></ul>
+            String[] lines = selectedText.split("\n");
+            StringBuilder sb = new StringBuilder("<ul>");
+            for (String line : lines) {
+                line = escapeHTML(line).trim();
+                if (!line.isEmpty()) {
+                    sb.append("<li>").append(line).append("</li>");
+                }
+            }
+            sb.append("</ul>");
+
+            ((HTMLEditorKit) getEditorKit()).insertHTML(doc, start, sb.toString(), 0, 0, null);
+            isDirty = true;
+        } catch (Exception ex) {
+            ex.printStackTrace();
+        }
+    }
+
+    /**
+     * Apply alignment to the selected paragraphs (or the paragraph containing the caret).
+     * alignment should be one of StyleConstants.ALIGN_LEFT, ALIGN_CENTER, ALIGN_RIGHT, etc.
+     */
+    public void applyAlignment(int alignment) {
+        isDirty = true;
+        // We can do this via paragraph attributes:
+        int start = getSelectionStart();
+        int end = getSelectionEnd();
+        if (start == end) {
+            Element para = ((HTMLDocument) getDocument()).getParagraphElement(start);
+            start = para.getStartOffset();
+            end = para.getEndOffset();
+        }
+        SimpleAttributeSet sas = new SimpleAttributeSet();
+        StyleConstants.setAlignment(sas, alignment);
+        ((StyledDocument) getDocument()).setParagraphAttributes(start, end - start, sas, false);
+    }
+
+    /**
+     * Extend toggleOrApplyAttributeOnSelection to handle strikethrough as well.
+     */
+    private void toggleOrApplyAttributeOnSelection(int start, int end, String attrType) {
+        isDirty = true;
+        StyledDocument sdoc = (StyledDocument) getDocument();
+        boolean allSet = true;
+
+        for (int pos = start; pos < end; pos++) {
+            Element el = sdoc.getCharacterElement(pos);
+            AttributeSet as = el.getAttributes();
+            switch (attrType) {
+                case "bold":
+                    if (!StyleConstants.isBold(as)) {
+                        allSet = false;
+                    }
+                    break;
+                case "italic":
+                    if (!StyleConstants.isItalic(as)) {
+                        allSet = false;
+                    }
+                    break;
+                case "underline":
+                    if (!StyleConstants.isUnderline(as)) {
+                        allSet = false;
+                    }
+                    break;
+                case "strikethrough":
+                    if (!StyleConstants.isStrikeThrough(as)) {
+                        allSet = false;
+                    }
+                    break;
+            }
+            if (!allSet) break;
+        }
+
+        MutableAttributeSet newAttr = new SimpleAttributeSet();
+        switch (attrType) {
+            case "bold":
+                StyleConstants.setBold(newAttr, !allSet);
+                break;
+            case "italic":
+                StyleConstants.setItalic(newAttr, !allSet);
+                break;
+            case "underline":
+                StyleConstants.setUnderline(newAttr, !allSet);
+                break;
+            case "strikethrough":
+                StyleConstants.setStrikeThrough(newAttr, !allSet);
+                break;
+        }
+        sdoc.setCharacterAttributes(start, end - start, newAttr, false);
+    }
+
+    private String escapeHTML(String str) {
+        return str.replace("&", "&amp;")
+                .replace("<", "&lt;")
+                .replace(">", "&gt;");
+    }
+
 }

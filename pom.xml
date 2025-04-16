@@ -12,13 +12,36 @@
         <maven.compiler.source>22</maven.compiler.source>
         <maven.compiler.target>22</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+
+        <itext.pdfhtml.version>6.1.0</itext.pdfhtml.version>
+        <itext.version>9.1.0</itext.version> <!-- The matching core iText version -->
     </properties>
     <dependencies>
+        <!-- iText 7 HTML-to-PDF conversion library -->
+        <dependency>
+            <groupId>com.itextpdf</groupId>
+            <artifactId>html2pdf</artifactId>
+            <version>${itext.pdfhtml.version}</version>
+        </dependency>
+
+        <!-- Optional for PDF/UA compliance and advanced features -->
+        <dependency>
+            <groupId>com.itextpdf</groupId>
+            <artifactId>pdfua</artifactId>
+            <version>${itext.version}</version>
+        </dependency>
+
         <dependency>
             <groupId>com.openai</groupId>
             <artifactId>openai-java</artifactId>
             <version>1.2.0</version>
         </dependency>
+        <dependency>
+            <groupId>com.github.librepdf</groupId>
+            <artifactId>openpdf</artifactId>
+            <version>1.3.30</version>
+        </dependency>
+
     </dependencies>
 
 </project>

@@ -3,22 +3,27 @@
  */
 public class AutocompletePromptManager {
 
-    public static String getPrompt(String currentText, int variation) {
+    public static String getPrompt(String currentText, int variation, PreferencesManager prefs) {
         String context = extractContext(currentText);
+        String fallback = defaultPromptForIndex(variation);
+        String userPrompt = prefs.getPreference("autocompletePrompt" + variation, fallback);
 
-        String basePrompt = "You are a professional writing autocomplete assistant called Syngrafi. "
-                + "Please continue the user's text carefully, ensuring that punctuation is followed by a space IF NOT ALREADY. "
-                + "Return up to 2 sentences, without repeating ANY text in the \"text so far\" portion (in the backticks). No ellipses. "
-                + "Text so far:\n```"
-                + context + "\n```\nContinuation:";
+        String basePrompt =
+                "You are a professional writing autocomplete assistant called Syngrafi. "
+                        + "Please continue the user's text carefully, ensuring that punctuation "
+                        + "is followed by a space. "
+                        + "Return up to 2 sentences. Do not repeat ANY text in \"text so far\" "
+                        + "(in the backticks). No ellipses.\n"
+                        + "Text so far:\n```" + context + "\n```\nContinuation:";
 
-        switch (variation) {
-            case 1:
-                return basePrompt + " Provide the most likely next phrase.";
-            case 2:
-                return basePrompt + " Provide an alternative direction.";
-            default:
-                return basePrompt + " Expand on this with additional detail.";
+        return basePrompt + userPrompt.trim();
+    }
+
+    private static String defaultPromptForIndex(int i) {
+        switch (i) {
+            case 1: return "Provide the most likely next phrase.";
+            case 2: return "Provide an alternative direction.";
+            default: return "Expand on this with additional detail.";
         }
     }
 
@@ -29,4 +34,5 @@ public class AutocompletePromptManager {
         }
         return text.substring(text.length() - 400);
     }
+
 }
