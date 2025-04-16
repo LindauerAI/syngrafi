@@ -1,38 +1,54 @@
-/**
- * Manages the generation of prompts for autocomplete functionality.
- */
+// AutocompletePromptManager.java
 public class AutocompletePromptManager {
 
-    public static String getPrompt(String currentText, int variation, PreferencesManager prefs) {
-        String context = extractContext(currentText);
-        String fallback = defaultPromptForIndex(variation);
-        String userPrompt = prefs.getPreference("autocompletePrompt" + variation, fallback);
+    /**
+     * Builds a prompt that clearly separates before‑caret context,
+     * after‑caret context, and a concise instruction for completion.
+     */
+    public static String getPrompt(
+            String beforeText,
+            String afterText,
+            int variation,
+            PreferencesManager prefs
+    ) {
+        // Trim contexts
+        String left = beforeText.length() > 400
+                ? beforeText.substring(beforeText.length() - 400)
+                : beforeText;
+        String right = afterText.length() > 200
+                ? afterText.substring(0, 200)
+                : afterText;
 
-        String basePrompt =
-                "You are a professional writing autocomplete assistant called Syngrafi. "
-                        + "Please continue the user's text carefully, ensuring that punctuation "
-                        + "is followed by a space. "
-                        + "Return up to 2 sentences. Do not repeat ANY text in \"text so far\" "
-                        + "(in the backticks). No ellipses.\n"
-                        + "Text so far:\n```" + context + "\n```\nContinuation:";
+        String userPref = prefs.getPreference(
+                "autocompletePrompt" + variation,
+                defaultPromptForIndex(variation)
+        );
 
-        return basePrompt + userPrompt.trim();
+        return String.join("\n",
+                "You are Syngrafi’s Context‑Aware Autocomplete. ",
+                "Your task: provide a seamless continuation at the cursor position, ",
+                "respecting style, punctuation, and not repeating existing text. " +
+                "Do not provide any formatting in your answer, just the raw text.",
+                "",
+                "=== Text before cursor (up to 400 chars) ===",
+                "```" + left + "```",
+                "",
+                "=== Text after cursor (up to 200 chars) ===",
+                "```" + right + "```",
+                "",
+                "=== Suggestion ===",
+                userPref.trim()
+        );
     }
 
     private static String defaultPromptForIndex(int i) {
         switch (i) {
-            case 1: return "Provide the most likely next phrase.";
-            case 2: return "Provide an alternative direction.";
-            default: return "Expand on this with additional detail.";
+            case 1:
+                return "Provide the most likely next phrase.";
+            case 2:
+                return "Offer an alternative direction or phrasing.";
+            default:
+                return "Expand with additional relevant detail.";
         }
     }
-
-    private static String extractContext(String text) {
-        text = text.trim();
-        if (text.length() <= 400) {
-            return text;
-        }
-        return text.substring(text.length() - 400);
-    }
-
 }

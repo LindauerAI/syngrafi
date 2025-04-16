@@ -5,6 +5,8 @@ import java.awt.*;
 import java.awt.event.*;
 import java.io.*;
 import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.Date;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -12,14 +14,19 @@ import api.APIProvider;
 import api.GeminiProvider;
 import api.OpenAIProvider;
 import com.itextpdf.html2pdf.HtmlConverter;
-
+import com.formdev.flatlaf.FlatDarkLaf;
+import com.formdev.flatlaf.FlatLightLaf;
+import com.formdev.flatlaf.util.SystemInfo;
 
 public class Syngrafi extends JFrame {
+    private static final String VERSION = "1.0";
     private TextEditor textEditor;
     private JLabel statusBar;
     private PreferencesManager preferencesManager;
     private APIProvider currentProvider;
     private File currentFile = null;
+    private long creationTimestamp = 0;
+    private long lastEditTimestamp = 0;
 
     private JMenu recentFilesMenu;
 
@@ -35,6 +42,7 @@ public class Syngrafi extends JFrame {
                 provider.equals("OpenAI") ? "gpt-4o" : "gemini-2.0-flash");
         initStatusBar();
         initUI();
+
         updateAPIProvider(openAIKey, geminiKey, provider, model);
     }
 
@@ -48,7 +56,6 @@ public class Syngrafi extends JFrame {
             @Override
             public void windowClosing(WindowEvent e) {
                 if (checkUnsavedChanges()) {
-                    // Optionally call dispose() and exit
                     dispose();
                     System.exit(0);
                 }
@@ -57,12 +64,9 @@ public class Syngrafi extends JFrame {
         setLayout(new BorderLayout(10, 10));
 
         createMenuBar();
-
-        // Status bar
         statusBar.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
         add(statusBar, BorderLayout.SOUTH);
 
-        // A sidebar with advanced features (just placeholders / partial)
         SidebarPanel sidebarPanel = new SidebarPanel(this);
         sidebarPanel.setPreferredSize(new Dimension(250, 600));
         add(sidebarPanel, BorderLayout.WEST);
@@ -76,7 +80,6 @@ public class Syngrafi extends JFrame {
 
     private void createMenuBar() {
         JMenuBar menuBar = new JMenuBar();
-
         JMenu fileMenu = new JMenu("File");
 
         JMenuItem newItem = new JMenuItem("New");
@@ -98,7 +101,6 @@ public class Syngrafi extends JFrame {
         exportPdfItem.addActionListener(e -> exportAsPDF());
         fileMenu.add(exportPdfItem);
 
-
         recentFilesMenu = new JMenu("Recent Files");
         updateRecentFilesMenu();
         fileMenu.add(recentFilesMenu);
@@ -107,16 +109,16 @@ public class Syngrafi extends JFrame {
         commitVersionItem.addActionListener(e -> commitVersion());
         fileMenu.add(commitVersionItem);
 
-        menuBar.add(fileMenu);
-
         JMenuItem settingsItem = new JMenuItem("Settings");
         settingsItem.addActionListener(_ -> new SettingsDialog(this, preferencesManager).setVisible(true));
         fileMenu.add(settingsItem);
 
+        menuBar.add(fileMenu);
+
         JMenu helpMenu = new JMenu("Help");
         JMenuItem aboutItem = new JMenuItem("About Syngrafi");
         aboutItem.addActionListener(e -> JOptionPane.showMessageDialog(this,
-                "Syngrafi\nVersion 1.0\n\n" +
+                "Syngrafi\nVersion " + VERSION + "\n\n" +
                         "A professional writing tool combining rich text editing with AI assistance\n" +
                         "for composition, rewriting, and content generation.",
                 "About Syngrafi", JOptionPane.INFORMATION_MESSAGE));
@@ -133,14 +135,12 @@ public class Syngrafi extends JFrame {
         JToolBar toolBar = new JToolBar();
         toolBar.setFloatable(false);
 
-        // Normal
         JButton normalButton = new JButton("Normal");
         normalButton.setToolTipText("Normal text");
         normalButton.addActionListener(e -> textEditor.setNormalText());
         normalButton.setFocusable(false);
         toolBar.add(normalButton);
 
-        // Bold
         JButton boldButton = new JButton("B");
         boldButton.setFont(boldButton.getFont().deriveFont(Font.BOLD));
         boldButton.setToolTipText("Ctrl+B toggles bold");
@@ -148,7 +148,6 @@ public class Syngrafi extends JFrame {
         boldButton.setFocusable(false);
         toolBar.add(boldButton);
 
-        // Italic
         JButton italicButton = new JButton("I");
         italicButton.setFont(italicButton.getFont().deriveFont(Font.ITALIC));
         italicButton.setToolTipText("Ctrl+I toggles italic");
@@ -156,14 +155,12 @@ public class Syngrafi extends JFrame {
         italicButton.setFocusable(false);
         toolBar.add(italicButton);
 
-        // Underline
         JButton underlineButton = new JButton("U");
         underlineButton.setToolTipText("Ctrl+U toggles underline");
         underlineButton.addActionListener(e -> textEditor.applyUnderlineToSelectionOrToggle());
         underlineButton.setFocusable(false);
         toolBar.add(underlineButton);
 
-        // Strikethrough
         JButton strikeButton = new JButton("S");
         strikeButton.setToolTipText("Strikethrough");
         strikeButton.addActionListener(e -> textEditor.applyStrikethrough());
@@ -185,14 +182,12 @@ public class Syngrafi extends JFrame {
         toolBar.add(h2Button);
         toolBar.addSeparator();
 
-        // Ordered List (Numbered)
         JButton olButton = new JButton("OL");
         olButton.setToolTipText("Convert selection to numbered list");
         olButton.addActionListener(e -> textEditor.applyOrderedList());
         olButton.setFocusable(false);
         toolBar.add(olButton);
 
-        // Unordered List (Bulleted)
         JButton ulButton = new JButton("UL");
         ulButton.setToolTipText("Convert selection to bulleted list");
         ulButton.addActionListener(e -> textEditor.applyUnorderedList());
@@ -201,21 +196,18 @@ public class Syngrafi extends JFrame {
 
         toolBar.addSeparator();
 
-        // Alignment: Left
         JButton alignLeftButton = new JButton("Left");
         alignLeftButton.addActionListener(e -> textEditor.applyAlignment(StyleConstants.ALIGN_LEFT));
         alignLeftButton.setToolTipText("Align left");
         alignLeftButton.setFocusable(false);
         toolBar.add(alignLeftButton);
 
-        // Alignment: Center
         JButton alignCenterButton = new JButton("Center");
         alignCenterButton.addActionListener(e -> textEditor.applyAlignment(StyleConstants.ALIGN_CENTER));
         alignCenterButton.setToolTipText("Align center");
         alignCenterButton.setFocusable(false);
         toolBar.add(alignCenterButton);
 
-        // Alignment: Right
         JButton alignRightButton = new JButton("Right");
         alignRightButton.addActionListener(e -> textEditor.applyAlignment(StyleConstants.ALIGN_RIGHT));
         alignRightButton.setToolTipText("Align right");
@@ -224,7 +216,6 @@ public class Syngrafi extends JFrame {
 
         toolBar.addSeparator();
 
-        // Existing combo for fonts
         JLabel fontLabel = new JLabel("Font:");
         toolBar.add(fontLabel);
         String[] basicFonts = new String[] { "Serif", "SansSerif", "Monospaced", "Georgia" };
@@ -257,7 +248,6 @@ public class Syngrafi extends JFrame {
         textEditor = new TextEditor(statusBar, preferencesManager);
         textEditor.setFont(new Font("Serif", Font.PLAIN, 12));
 
-        // Key bindings
         InputMap im = textEditor.getInputMap(JComponent.WHEN_FOCUSED);
         ActionMap am = textEditor.getActionMap();
 
@@ -270,7 +260,6 @@ public class Syngrafi extends JFrame {
             }
         });
 
-        // Ctrl+1..9 => insert that suggestion
         for (int i = 1; i <= 9; i++) {
             final int suggestionIndex = i - 1;
             KeyStroke ks = KeyStroke.getKeyStroke("control " + i);
@@ -283,7 +272,6 @@ public class Syngrafi extends JFrame {
             });
         }
 
-        // B, I, U
         KeyStroke ctrlB = KeyStroke.getKeyStroke("control B");
         im.put(ctrlB, "boldSelection");
         am.put("boldSelection", new AbstractAction() {
@@ -311,10 +299,19 @@ public class Syngrafi extends JFrame {
             }
         });
 
+        // Add Ctrl+Shift+V for paste and match style
+        KeyStroke ctrlShiftV = KeyStroke.getKeyStroke("control shift V");
+        im.put(ctrlShiftV, "pasteMatchStyle");
+        am.put("pasteMatchStyle", new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                textEditor.pasteAndMatchStyle();
+            }
+        });
+
         JScrollPane scrollPane = new JScrollPane(textEditor);
         add(scrollPane, BorderLayout.CENTER);
 
-        // Undo (Ctrl+Z)
         KeyStroke ctrlZ = KeyStroke.getKeyStroke("control Z");
         im.put(ctrlZ, "undoAction");
         am.put("undoAction", new AbstractAction() {
@@ -324,7 +321,6 @@ public class Syngrafi extends JFrame {
             }
         });
 
-        // Redo (Ctrl+Shift+Z)
         KeyStroke ctrlShiftZ = KeyStroke.getKeyStroke("control shift Z");
         im.put(ctrlShiftZ, "redoAction");
         am.put("redoAction", new AbstractAction() {
@@ -333,17 +329,12 @@ public class Syngrafi extends JFrame {
                 textEditor.redo();
             }
         });
-
     }
 
     public TextEditor getTextEditor() {
         return textEditor;
     }
 
-    /**
-     * Called by SettingsDialog to update the currentProvider
-     * so suggestions can work immediately.
-     */
     public void updateAPIProvider(String openAIKey, String geminiKey,
                                   String provider, String model) {
         if (provider.equals("OpenAI")) {
@@ -389,6 +380,8 @@ public class Syngrafi extends JFrame {
         textEditor.setText("");
         textEditor.markClean();
         currentFile = null;
+        creationTimestamp = System.currentTimeMillis();
+        lastEditTimestamp = creationTimestamp;
         statusBar.setText("New document created.");
     }
 
@@ -417,9 +410,6 @@ public class Syngrafi extends JFrame {
         updateRecentFilesMenu();
     }
 
-    /**
-     * Return false if user chooses "Cancel" in the "Save changes?" dialog.
-     */
     private boolean checkUnsavedChanges() {
         if (textEditor.isDirty()) {
             int option = JOptionPane.showConfirmDialog(this,
@@ -450,24 +440,30 @@ public class Syngrafi extends JFrame {
         }
         String entireText = sb.toString();
 
-        // Parse out AI/HUMAN counts if present
-        Pattern p = Pattern.compile("<!--\\s*AI_CHARS=(\\d+)\\s+HUMAN_CHARS=(\\d+)\\s*-->");
+        // Parse metadata
+        Pattern p = Pattern.compile("<!--\\s*AI_CHARS=(\\d+)\\s+HUMAN_CHARS=(\\d+)\\s*CREATED=(\\d+)\\s*LAST_EDIT=(\\d+)\\s*VERSION=([\\d.]+)\\s*-->");
         Matcher m = p.matcher(entireText);
         int aiChars = 0, humanChars = 0;
+        long created = 0, lastEdit = 0;
+        String version = VERSION;
         if (m.find()) {
             try {
                 aiChars = Integer.parseInt(m.group(1));
                 humanChars = Integer.parseInt(m.group(2));
+                created = Long.parseLong(m.group(3));
+                lastEdit = Long.parseLong(m.group(4));
+                version = m.group(5);
             } catch (NumberFormatException ignored) {
             }
             entireText = m.replaceFirst("");
         }
         textEditor.setAICharCount(aiChars);
         textEditor.setHumanCharCount(humanChars);
-        textEditor.setText(entireText);
+        textEditor.setText(entireText.trim());
         textEditor.markClean();
+        creationTimestamp = created > 0 ? created : System.currentTimeMillis();
+        lastEditTimestamp = lastEdit > 0 ? lastEdit : creationTimestamp;
 
-        // Count words from rendered text (strip HTML tags)
         int wordCount = countWordsFromHTML(entireText);
 
         statusBar.setText("Opened: " + file.getName() + " [AI=" + aiChars
@@ -475,7 +471,6 @@ public class Syngrafi extends JFrame {
     }
 
     public void saveDocument() {
-        // If there is no file associated (new file), then prompt for a file
         if (currentFile == null) {
             JFileChooser chooser = new JFileChooser();
             chooser.setCurrentDirectory(getDefaultDirectory());
@@ -485,6 +480,9 @@ public class Syngrafi extends JFrame {
                 if (!currentFile.getName().toLowerCase().endsWith(".html")) {
                     currentFile = new File(currentFile.getAbsolutePath() + ".html");
                 }
+                if (creationTimestamp == 0) {
+                    creationTimestamp = System.currentTimeMillis();
+                }
             } else {
                 return;
             }
@@ -492,20 +490,17 @@ public class Syngrafi extends JFrame {
 
         if (currentFile != null) {
             String textToSave = textEditor.getText();
-            // Insert the head snippet if not already present
-            if (true) {
-                int htmlIndex = textToSave.indexOf("<html");
-                if (htmlIndex >= 0) {
-                    int headInsertion = textToSave.indexOf(">", htmlIndex) + 1;
-                    textToSave = textToSave.substring(0, headInsertion) + textToSave.substring(headInsertion);
-                }
-            }
+            lastEditTimestamp = System.currentTimeMillis();
 
             int aiCount = textEditor.getAICharCount();
             int humanCount = textEditor.getHumanCharCount();
-            textToSave += "\n<!-- AI_CHARS=" + aiCount + " HUMAN_CHARS=" + humanCount + " -->\n";
+            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
+            textToSave += "\n<!-- AI_CHARS=" + aiCount +
+                    " HUMAN_CHARS=" + humanCount +
+                    " CREATED=" + creationTimestamp +
+                    " LAST_EDIT=" + lastEditTimestamp +
+                    " VERSION=" + VERSION + " -->\n";
 
-            // Use the helper to count words from the rendered (tag-stripped) text.
             int wordCount = countWordsFromHTML(textToSave);
 
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(currentFile))) {
@@ -523,7 +518,6 @@ public class Syngrafi extends JFrame {
     }
 
     private int countWordsFromHTML(String htmlText) {
-        // Remove HTML tags
         String textOnly = htmlText.replaceAll("<[^>]+>", " ");
         textOnly = textOnly.replaceAll("&nbsp;", " ");
         textOnly = textOnly.trim();
@@ -548,7 +542,11 @@ public class Syngrafi extends JFrame {
         String fileName = "version_" + System.currentTimeMillis() + ".html";
         File versionFile = new File(versionDir, fileName);
 
-        text += "\n<!-- AI_CHARS=" + aiCount + " HUMAN_CHARS=" + humanCount + " -->\n";
+        text += "\n<!-- AI_CHARS=" + aiCount +
+                " HUMAN_CHARS=" + humanCount +
+                " CREATED=" + creationTimestamp +
+                " LAST_EDIT=" + lastEditTimestamp +
+                " VERSION=" + VERSION + " -->\n";
 
         try (BufferedWriter writer = new BufferedWriter(new FileWriter(versionFile))) {
             writer.write(text);
@@ -564,14 +562,12 @@ public class Syngrafi extends JFrame {
     }
 
     private void exportAsPDF() {
-        // Ensure we have text to export
         if (textEditor == null || textEditor.getText().trim().isEmpty()) {
             JOptionPane.showMessageDialog(this,
                     "No document to export.", "Export as PDF", JOptionPane.INFORMATION_MESSAGE);
             return;
         }
 
-        // Prompt user for PDF filename
         JFileChooser chooser = new JFileChooser();
         chooser.setCurrentDirectory(getDefaultDirectory());
         chooser.setSelectedFile(new File("document.pdf"));
@@ -585,10 +581,7 @@ public class Syngrafi extends JFrame {
         }
 
         try {
-            // Grab the HTML content from the editor
             String htmlContent = textEditor.getText();
-
-            // Convert the HTML string to PDF in-memory, writing to the chosen file
             HtmlConverter.convertToPdf(
                     new ByteArrayInputStream(htmlContent.getBytes(StandardCharsets.UTF_8)),
                     new FileOutputStream(pdfFile)
@@ -608,15 +601,41 @@ public class Syngrafi extends JFrame {
     }
 
     public static void main(String[] args) {
+        // Setup FlatLaf theme based on preferences
+        PreferencesManager prefs = new PreferencesManager();
+        prefs.loadPreferences();
+        String themePref = prefs.getPreference("theme", "System");
+
+        boolean useDark;
+        if ("Dark".equals(themePref)) {
+            useDark = true;
+        } else if ("Light".equals(themePref)) {
+            useDark = false;
+        } else { // "System"
+            // Detect system theme
+            if (SystemInfo.isWindows) {
+                useDark = SystemInfo.isWinSystemAppsUseDarkTheme();
+            } else if (SystemInfo.isMac) {
+                useDark = SystemInfo.isMacSystemDarkTheme();
+            } else { // Linux/Other - Default to light if detection fails
+                useDark = false;
+            }
+        }
+
         try {
-            UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());
-        } catch (Exception ex) {
-            ex.printStackTrace();
+            if (useDark) {
+                UIManager.setLookAndFeel(new FlatDarkLaf());
+            } else {
+                UIManager.setLookAndFeel(new FlatLightLaf());
+            }
+        } catch (UnsupportedLookAndFeelException e) {
+            System.err.println("Failed to initialize FlatLaf theme: " + e.getMessage());
+            // Continue with default L&F
         }
 
         SwingUtilities.invokeLater(() -> {
-            Syngrafi app = new Syngrafi();
-            app.setVisible(true);
+            Syngrafi editor = new Syngrafi();
+            editor.setVisible(true);
         });
     }
 }

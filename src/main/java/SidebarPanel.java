@@ -266,7 +266,12 @@ public class SidebarPanel extends JPanel {
             // Reposition legend below the pie chart instead of to the right
             int legendX = x;
             int legendY = y + h + 25;
-            g2.setColor(Color.BLACK);
+//            if light theme do black, if dark theme do white
+            if (UIManager.getLookAndFeel().getName().contains("Dark")) {
+                g2.setColor(Color.WHITE);
+            } else {
+                g2.setColor(Color.BLACK);
+            }
             g2.drawString("AI: " + ai + " chars", legendX, legendY);
             g2.drawString("Human: " + human + " chars", legendX, legendY + 15);
             g2.drawString("Total: " + total + " chars", legendX, legendY + 30);
