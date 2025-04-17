@@ -1,6 +1,10 @@
 import api.APIProvider;
-
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 /**
  * Handles the logic for rewriting selected text using an API provider,
@@ -17,50 +21,75 @@ public class RewriteManager {
     }
 
     /**
-     * Asynchronously performs the rewrite operation.
+     * Asynchronously performs the rewrite operation, generating multiple suggestions.
      *
      * @param selectedText       The text selected by the user.
      * @param userProvidedPrompt The specific rewrite instruction provided by the user (can be empty).
-     * @return A CompletableFuture containing the rewritten text or an error message prefixed with "ERROR:".
+     * @return A CompletableFuture containing a List of rewritten text suggestions,
+     *         or a list containing a single error message prefixed with "ERROR:".
      */
-    public CompletableFuture<String> performRewrite(String selectedText, String userProvidedPrompt) {
+    public CompletableFuture<List<String>> performRewrite(String selectedText, String userProvidedPrompt) {
         if (apiProvider == null || selectedText == null || selectedText.trim().isEmpty()) {
-            return CompletableFuture.completedFuture("ERROR: Invalid input or API provider.");
+            return CompletableFuture.completedFuture(Collections.singletonList("ERROR: Invalid input or API provider."));
         }
 
-        // Get global prompts
-        String stylePrompt = prefs.getPreference("generalStylePrompt", ""); // Use the key from SettingsDialog
-        String references = prefs.getAIReferences(); // Use the specific getter
-        String defaultRewrite = prefs.getDefaultRewritePrompt(); // Get default rewrite instruction
+        // Get settings
+        String stylePrompt = prefs.getPreference("generalStylePrompt", "");
+        String references = prefs.getAIReferences();
+        String defaultRewrite = prefs.getDefaultRewritePrompt();
+        int numSuggestions = prefs.getNumRewriteSuggestions(); // Get number of suggestions
+        if (numSuggestions <= 0) numSuggestions = 1; // Ensure at least 1
 
-        // Use user prompt if provided, otherwise use default
-        String finalUserInstruction = (userProvidedPrompt != null && !userProvidedPrompt.trim().isEmpty())
-                ? userProvidedPrompt.trim()
-                : defaultRewrite;
-
-        // Construct the final prompt
-        StringBuilder finalApiPrompt = new StringBuilder();
-        finalApiPrompt.append(finalUserInstruction).append("\n\n---\n");
-
+        // Determine final instruction
+        String finalUserInstruction = (userProvidedPrompt != null && !userProvidedPrompt.trim().isEmpty()) 
+                                       ? userProvidedPrompt.trim() 
+                                       : defaultRewrite;
+        
+        // Construct the base prompt structure
+        StringBuilder basePromptBuilder = new StringBuilder();
+        basePromptBuilder.append(finalUserInstruction).append("\n\n---\n");
         if (!stylePrompt.trim().isEmpty()) {
-            finalApiPrompt.append("Apply the following style: ").append(stylePrompt).append("\n\n---\n");
+            basePromptBuilder.append("Apply the following style, but prioritize the previous instruction: ").append(stylePrompt).append("\n\n---\n");
         }
-
         if (!references.trim().isEmpty()) {
-            finalApiPrompt.append("Use the following reference examples:\n").append(references).append("\n\n---\n");
+            basePromptBuilder.append("Use the following reference examples:\n").append(references).append("\n\n---\n");
         }
+        basePromptBuilder.append("Do not provide multiple options and do not use unicode characters. The text will be inserted directly into the file. Rewrite the following text:\n\n").append(selectedText);
+        
+        String basePrompt = basePromptBuilder.toString(); // Base prompt without variation info
 
-        finalApiPrompt.append("Do not provide multiple options and do not use unicode characters. The text will be inserted directly into the file. Rewrite the following text: \n\n").append(selectedText);
+        // Create a list of CompletableFuture for each suggestion
+        List<CompletableFuture<String>> suggestionFutures = IntStream.range(0, numSuggestions)
+            .mapToObj(i -> CompletableFuture.supplyAsync(() -> {
+                try {
+                    // Add variation info if needed by API, or just call multiple times
+                    // String promptToSend = basePrompt + "\n(Variation: " + (i + 1) + ")"; 
+                    String promptToSend = basePrompt; // Assuming multiple calls are sufficient
+                    return apiProvider.generateCompletion(promptToSend);
+                } catch (Exception ex) {
+                    System.err.println("Error during API call for rewrite suggestion " + (i+1) + ": " + ex.getMessage());
+                    // Return null or a specific error marker for this suggestion
+                    return null; 
+                }
+            }))
+            .collect(Collectors.toList());
 
-        // Run API call asynchronously
-        String promptToSend = finalApiPrompt.toString();
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return apiProvider.generateCompletion(promptToSend);
-            } catch (Exception ex) {
-                System.err.println("Error during API call for rewrite: " + ex.getMessage());
-                return "ERROR: API call failed. " + ex.getMessage();
-            }
-        });
+        // Combine all futures: Wait for all to complete
+        return CompletableFuture.allOf(suggestionFutures.toArray(new CompletableFuture[0]))
+            .thenApply(v -> suggestionFutures.stream()
+                .map(future -> {
+                    try {
+                        return future.join(); // Get result from completed future
+                    } catch (Exception e) {
+                        return null; // Handle potential exceptions during join
+                    }
+                })
+                .filter(result -> result != null && !result.trim().isEmpty()) // Filter out nulls/empty results
+                .collect(Collectors.toList()))
+            .exceptionally(ex -> {
+                 // Handle exceptions during the combination/collection phase
+                 System.err.println("Error combining rewrite suggestion futures: " + ex.getMessage());
+                 return Collections.singletonList("ERROR: Failed to generate rewrite suggestions.");
+            });
     }
 } 

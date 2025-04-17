@@ -9,6 +9,7 @@ import javax.swing.text.html.HTML;
 import javax.swing.text.html.HTMLDocument;
 import javax.swing.text.html.HTMLEditorKit;
 import javax.swing.text.html.StyleSheet;
+import javax.swing.undo.AbstractUndoableEdit;
 import javax.swing.undo.CannotRedoException;
 import javax.swing.undo.CannotUndoException;
 import javax.swing.undo.UndoManager;
@@ -25,6 +26,7 @@ import java.io.StringWriter;
 import javax.swing.text.Highlighter;
 import javax.swing.text.DefaultHighlighter;
 import java.util.List;
+import java.util.ArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
@@ -32,6 +34,14 @@ import java.util.concurrent.TimeUnit;
 import java.net.URL;
 import java.net.MalformedURLException;
 import java.io.File;
+import javax.swing.InputMap;
+import javax.swing.ActionMap;
+import javax.swing.KeyStroke;
+import javax.swing.JComponent;
+import javax.swing.event.PopupMenuListener;
+import javax.swing.event.PopupMenuEvent;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * A text editor that uses HTMLEditorKit for formatting,
@@ -50,7 +60,7 @@ public class TextEditor extends JTextPane {
     private Timer autocompleteTimer;
     private boolean isAutocompleteActive = false;
     private JPopupMenu autoCompletePopup;
-    private String[] currentSuggestions;
+    private String[] currentAutocompleteSuggestions;
 
     // Character counters
     private int aiCharCount = 0;
@@ -64,6 +74,15 @@ public class TextEditor extends JTextPane {
     private int consecutiveCharsTyped = 0;
     private long lastCharTypedTimestamp = 0;
     private static final long TYPING_RESET_THRESHOLD_MS = 1500; // Reset counter if pause > 1.5s
+
+    // Rewrite fields (New)
+    private JPopupMenu rewritePopup;
+    private List<String> currentRewriteSuggestions;
+    private boolean isRewritePopupActive = false;
+    private int rewriteSelectionStart = -1;
+    private int rewriteSelectionEnd = -1;
+
+    private static final int REWRITE_POPUP_VERTICAL_OFFSET = 15; // Increased from 5 to 15 for better visibility
 
     public TextEditor(JLabel statusBar, PreferencesManager prefs) {
         this.statusBar = statusBar;
@@ -82,8 +101,18 @@ public class TextEditor extends JTextPane {
         styles.addRule("h2 { font-size: 18pt; }");
 
         setText("");
+        
+        // Initialize popups with proper focus handling
         autoCompletePopup = new JPopupMenu();
-        autoCompletePopup.setFocusable(false);
+        // Allow focus - needed for keyboard handling
+        autoCompletePopup.setFocusable(true);
+        
+        rewritePopup = new JPopupMenu();
+        // Allow focus - needed for keyboard handling
+        rewritePopup.setFocusable(true);
+        
+        // Add popup menu listeners to prevent closing on focus loss
+        setupPopupListeners();
 
         getDocument().addUndoableEditListener(e -> undoManager.addEdit(e.getEdit()));
 
@@ -93,6 +122,77 @@ public class TextEditor extends JTextPane {
         loadNumSuggestions();
         setupPasteAction();
         initializeJOrtho(); // Initialize JOrtho spellchecker
+        setupRewriteKeys(); // Setup keybindings for rewrite popup
+        setupGlobalEscapeKey(); // Add call to setup global escape key
+    }
+
+    /**
+     * Sets up popup menu listeners to maintain state when focus changes
+     */
+    private void setupPopupListeners() {
+        // For autocomplete popup
+        autoCompletePopup.addPopupMenuListener(new PopupMenuListener() {
+            @Override
+            public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
+                // Ensure flag is set when popup becomes visible
+                isAutocompleteActive = true;
+                System.out.println("Autocomplete popup becoming visible");
+            }
+
+            @Override
+            public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
+                System.out.println("Autocomplete popup will become invisible event");
+                // DO NOT MODIFY isAutocompleteActive FLAG HERE
+                // Let cancelAutoComplete handle this to avoid race conditions
+            }
+
+            @Override
+            public void popupMenuCanceled(PopupMenuEvent e) {
+                System.out.println("Autocomplete popup canceled event");
+                // Handle popup cancellation that's not through our cancelAutoComplete method
+                // This happens when user clicks outside the popup
+                if (isAutocompleteActive) {
+                    SwingUtilities.invokeLater(() -> {
+                        if (isAutocompleteActive) {
+                            System.out.println("Calling cancelAutoComplete from popupMenuCanceled event");
+                            cancelAutoComplete();
+                        }
+                    });
+                }
+            }
+        });
+        
+        // For rewrite popup
+        rewritePopup.addPopupMenuListener(new PopupMenuListener() {
+            @Override
+            public void popupMenuWillBecomeVisible(PopupMenuEvent e) {
+                // Ensure flag is set when popup becomes visible
+                isRewritePopupActive = true;
+                System.out.println("Rewrite popup becoming visible");
+            }
+
+            @Override
+            public void popupMenuWillBecomeInvisible(PopupMenuEvent e) {
+                System.out.println("Rewrite popup will become invisible event");
+                // DO NOT MODIFY isRewritePopupActive FLAG HERE
+                // Let cancelRewritePopup handle this to avoid race conditions
+            }
+
+            @Override
+            public void popupMenuCanceled(PopupMenuEvent e) {
+                System.out.println("Rewrite popup canceled event");
+                // Handle popup cancellation that's not through our cancelRewritePopup method
+                // This happens when user clicks outside the popup
+                if (isRewritePopupActive) {
+                    SwingUtilities.invokeLater(() -> {
+                        if (isRewritePopupActive) {
+                            System.out.println("Calling cancelRewritePopup from popupMenuCanceled event");
+                            cancelRewritePopup();
+                        }
+                    });
+                }
+            }
+        });
     }
 
     private void initializeJOrtho() {
@@ -157,6 +257,92 @@ public class TextEditor extends JTextPane {
      */
     @Override
     protected void processKeyEvent(KeyEvent e) {
+        // Add Escape key handling at the very beginning
+        if (e.getID() == KeyEvent.KEY_PRESSED && e.getKeyCode() == KeyEvent.VK_ESCAPE) {
+            System.out.println("Escape key pressed in processKeyEvent");
+            boolean handled = false;
+            
+            // First check for autocomplete popup
+            if (isAutocompleteActive) {
+                System.out.println("Escape detected in processKeyEvent: Cancelling Autocomplete (active=" + isAutocompleteActive + 
+                                  ", visible=" + (autoCompletePopup != null ? autoCompletePopup.isVisible() : "null") + ")");
+                cancelAutoComplete();
+                e.consume(); // Consume the event to prevent other handlers from processing it
+                handled = true;
+            }
+            
+            // Then check for rewrite popup
+            if (isRewritePopupActive) {
+                System.out.println("Escape detected in processKeyEvent: Cancelling Rewrite Popup (active=" + isRewritePopupActive + 
+                                  ", visible=" + (rewritePopup != null ? rewritePopup.isVisible() : "null") + ")");
+                cancelRewritePopup();
+                e.consume();
+                handled = true;
+            }
+            
+            if (handled) {
+                System.out.println("Escape key handled in processKeyEvent");
+                return; // Skip the rest of the method if we handled the event
+            } else {
+                System.out.println("Escape key not handled in processKeyEvent - no active popups detected");
+            }
+        }
+        
+        // Handle Ctrl+1 through Ctrl+9 for suggestion selection
+        if (e.getID() == KeyEvent.KEY_PRESSED && 
+            (e.getModifiersEx() & KeyEvent.CTRL_DOWN_MASK) != 0 &&
+            e.getKeyCode() >= KeyEvent.VK_1 && e.getKeyCode() <= KeyEvent.VK_9) {
+            
+            int index = e.getKeyCode() - KeyEvent.VK_1; // Convert to 0-based index
+            
+            // Detailed debugging of current state when key is pressed
+            System.out.println("========================");
+            System.out.println("ProcessKeyEvent: Ctrl+" + (index + 1) + " key detected");
+            System.out.println("isRewritePopupActive: " + isRewritePopupActive);
+            System.out.println("rewritePopup visible: " + (rewritePopup != null ? rewritePopup.isVisible() : "null"));
+            System.out.println("currentRewriteSuggestions: " + (currentRewriteSuggestions != null ? 
+                            "not null, size: " + currentRewriteSuggestions.size() : "null"));
+            
+            System.out.println("isAutocompleteActive: " + isAutocompleteActive);
+            System.out.println("autoCompletePopup visible: " + (autoCompletePopup != null ? autoCompletePopup.isVisible() : "null"));
+            System.out.println("currentAutocompleteSuggestions: " + (currentAutocompleteSuggestions != null ? 
+                            "not null, length: " + currentAutocompleteSuggestions.length : "null"));
+            
+            // For rewrite: Check if we have valid suggestions at the given index
+            boolean hasValidRewriteSuggestion = isRewritePopupActive && 
+                    currentRewriteSuggestions != null && 
+                    index < currentRewriteSuggestions.size() &&
+                    currentRewriteSuggestions.get(index) != null && 
+                    !currentRewriteSuggestions.get(index).isEmpty();
+            
+            // For autocomplete: Check if we have valid suggestions at the given index
+            boolean hasValidAutocompleteSuggestion = isAutocompleteActive && 
+                    currentAutocompleteSuggestions != null && 
+                    index < currentAutocompleteSuggestions.length &&
+                    currentAutocompleteSuggestions[index] != null && 
+                    !currentAutocompleteSuggestions[index].isEmpty();
+            
+            // Now try to apply the suggestions, prioritizing rewrite
+            boolean handled = false;
+            if (hasValidRewriteSuggestion) {
+                System.out.println("ProcessKeyEvent: Ctrl+" + (index + 1) + " for rewrite");
+                insertRewriteSuggestion(currentRewriteSuggestions.get(index));
+                handled = true;
+            } else if (hasValidAutocompleteSuggestion) {
+                System.out.println("ProcessKeyEvent: Ctrl+" + (index + 1) + " for autocomplete");
+                insertAutocompleteSuggestion(currentAutocompleteSuggestions[index]);
+                handled = true;
+            } else {
+                System.out.println("ProcessKeyEvent: Ctrl+" + (index + 1) + " - No valid suggestions to select");
+            }
+            System.out.println("========================");
+            
+            if (handled) {
+                e.consume();
+                return;
+            }
+        }
+        
         if (e.getID() == KeyEvent.KEY_PRESSED) {
             int caretPos = getCaretPosition();
             HTMLDocument doc = (HTMLDocument) getDocument();
@@ -172,7 +358,7 @@ public class TextEditor extends JTextPane {
                         try {
                             handleEnterInListItem(doc, kit, parentLi, caretPos);
                             e.consume(); // Consume the event
-                            return;
+                        return;
                         } catch (Exception ex) {
                             System.err.println("Error handling Enter in list item: " + ex.getMessage());
                             // Allow default action as fallback on error
@@ -198,7 +384,7 @@ public class TextEditor extends JTextPane {
                             handleBackspaceAtListItemStart(doc, kit, parentLi);
                             e.consume(); // Consume the event
                             return;
-                        } catch (Exception ex) {
+                    } catch (Exception ex) {
                             System.err.println("Error handling Backspace in list item: " + ex.getMessage());
                             // Allow default action as fallback on error
                         }
@@ -395,9 +581,7 @@ public class TextEditor extends JTextPane {
         getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
-                // Check if the change was likely a single character type
                 boolean isSingleCharInsert = (e.getLength() == 1);
-                boolean isMultiCharInsert = (e.getLength() > 1);
 
                 if (isSingleCharInsert) {
                     long now = System.currentTimeMillis();
@@ -406,37 +590,49 @@ public class TextEditor extends JTextPane {
                     }
                     consecutiveCharsTyped++;
                     lastCharTypedTimestamp = now;
+
+                    // --- Modified Autocomplete Logic --- 
+                    if (isAutocompleteActive) {
+                        // If popup is already active or being generated, cancel it because user continued typing
+                        cancelAutoComplete(); 
+                        consecutiveCharsTyped = 1; // Reset count after cancel, but consider this char as 1st
+                    } 
+                    
+                    // Schedule autocomplete if AI not disabled and >= 1 char typed recently
+                    if (!prefs.isAiFeaturesDisabled() && consecutiveCharsTyped >= 1) { 
+                scheduleAutocomplete();
+                    } else {
+                        // Explicitly cancel if conditions aren't met (e.g., AI disabled)
+                        cancelAutoComplete();
+                    }
+                    // --- End Modified Logic --- 
+
                 } else {
-                    // Reset counter for multi-char inserts (paste, etc.) or complex changes
+                    // Reset trigger counter for multi-char inserts (paste, etc.)
                     consecutiveCharsTyped = 0;
+                    // Also cancel autocomplete on paste/complex insert
+                    cancelAutoComplete(); 
                 }
                 
                 isDirty = true;
-
-                // Schedule autocomplete only if 2+ chars typed recently
-                if (consecutiveCharsTyped >= 2) { 
-                    scheduleAutocomplete();
-                } else {
-                    // If fewer than 2 chars typed (or counter reset), cancel any pending/visible autocomplete
-                    cancelAutoComplete(); 
-                }
                 updateStatusBarInfo();
             }
 
             @Override
             public void removeUpdate(DocumentEvent e) {
-                 isDirty = true;
-                 consecutiveCharsTyped = 0; // Reset trigger count
-                 cancelAutoComplete(); // Cancel autocomplete on backspace/delete
-                 updateStatusBarInfo();
+                isDirty = true;
+                consecutiveCharsTyped = 0; // Reset trigger count on delete/backspace
+                cancelAutoComplete(); // Cancel autocomplete on backspace/delete
+                updateStatusBarInfo();
             }
 
             @Override
             public void changedUpdate(DocumentEvent e) {
+                // Attribute changes (like formatting) - might want to cancel autocomplete?
                 isDirty = true;
+                consecutiveCharsTyped = 0; // Reset trigger count
+                cancelAutoComplete(); // Cancel autocomplete on style changes
                 updateStatusBarInfo();
-                // Reset autocomplete trigger on attribute change
-                consecutiveCharsTyped = 0; 
             }
         });
     }
@@ -475,11 +671,12 @@ public class TextEditor extends JTextPane {
         } catch (Exception ex) {
             n = 3;
         }
-        currentSuggestions = new String[n];
+        currentAutocompleteSuggestions = new String[n];
     }
 
     private void scheduleAutocomplete() {
-        if (isAnyDialogVisible()) return; 
+        if (prefs.isAiFeaturesDisabled()) return;
+        if (isAnyDialogVisible() || isRewritePopupActive) return;
         if (isAutocompleteActive || currentProvider == null) return;
 
         int delay = 1000; // Default delay updated
@@ -498,7 +695,7 @@ public class TextEditor extends JTextPane {
             @Override
             public void run() {
                 SwingUtilities.invokeLater(() -> {
-                    if (!isAnyDialogVisible()) { // Double check before triggering
+                    if (!isAnyDialogVisible() && !isRewritePopupActive) { // Double check popups
                          triggerAutocomplete();
                     }
                 });
@@ -526,18 +723,55 @@ public class TextEditor extends JTextPane {
     }
 
     public void cancelAutoComplete() {
-        autocompleteTimer.cancel();
-        autocompleteTimer = new Timer("AutocompleteTimer", true);
-        isAutocompleteActive = false;
-
-        if (autoCompletePopup.isVisible()) {
-            autoCompletePopup.setVisible(false);
-        }
+         System.out.println("cancelAutoComplete called, isAutocompleteActive=" + isAutocompleteActive + 
+                           ", popup visible=" + (autoCompletePopup != null && autoCompletePopup.isVisible()));
+         
+         // Always cancel pending timer
+         autocompleteTimer.cancel(); 
+         autocompleteTimer = new Timer("AutocompleteTimer", true); // Recreate timer
+         
+         // Set flag to false first
+         isAutocompleteActive = false;
+         
+         // Then hide popup if visible
+         if (autoCompletePopup != null && autoCompletePopup.isVisible()) {
+             System.out.println("Hiding autocomplete popup");
+             autoCompletePopup.setVisible(false);
+             statusBar.setText("Autocomplete cancelled."); // Provide feedback
+             currentAutocompleteSuggestions = null; // Clear the suggestions array
+         }
+         
+         // Restart the autocomplete timer after cancellation
+         // This ensures pressing Escape won't permanently disable autocomplete
+         if (!prefs.isAiFeaturesDisabled() && currentProvider != null && !isRewritePopupActive) {
+             int delay = 1000; // Default delay
+             try {
+                 delay = Integer.parseInt(prefs.getPreference("autocompleteDelay", "1000")); 
+                 if (delay < 0) delay = 1000;
+             } catch (Exception ex) {
+                 delay = 1000;
+             }
+             
+             final int finalDelay = delay;
+             // Schedule with a small additional delay to prevent immediate reactivation
+             autocompleteTimer.schedule(new TimerTask() {
+                 @Override
+                 public void run() {
+                     SwingUtilities.invokeLater(() -> {
+                         if (!isAnyDialogVisible() && !isRewritePopupActive && !isAutocompleteActive) {
+                             System.out.println("Restarting autocomplete after cancellation");
+                             scheduleAutocomplete();
+                         }
+                     });
+                 }
+             }, finalDelay); // Use the same delay as normal autocomplete
+         }
     }
 
     public void triggerAutocomplete() {
-         if (isAnyDialogVisible()) return; // Don't trigger if a dialog is open
-         if (isAutocompleteActive || currentProvider == null || getDocument().getLength() == 0) {
+        if (prefs.isAiFeaturesDisabled()) return;
+        if (isAnyDialogVisible() || isRewritePopupActive) return;
+        if (isAutocompleteActive || currentProvider == null || getDocument().getLength() == 0) {
             return;
         }
 
@@ -550,7 +784,7 @@ public class TextEditor extends JTextPane {
             n = 3;
         }
 
-        currentSuggestions = new String[n];
+        currentAutocompleteSuggestions = new String[n];
         isAutocompleteActive = true;
         statusBar.setText("Generating suggestions...");
 
@@ -587,21 +821,21 @@ public class TextEditor extends JTextPane {
                              System.err.println("API Error detected: " + raw);
                              errorMessage = "Autocomplete failed: API Quota Exceeded";
                              errorOccurred = true;
-                             currentSuggestions[i] = null; // Clear potential error message suggestion
+                             currentAutocompleteSuggestions[i] = null; // Clear potential error message suggestion
                              continue; // Skip processing this suggestion
                          }
                          // Add checks for other known error patterns if necessary
 
                          raw = cleanOverlap(getPlainText(), raw);
                          raw = cleanupSuggestion(getPlainText(), raw);
-                    currentSuggestions[i] = raw;
+                    currentAutocompleteSuggestions[i] = raw;
                     } catch (Exception futureEx) {
                         // Handle exception fetching individual future result
                         System.err.println("Error fetching suggestion future: " + futureEx.getMessage());
                         futureEx.printStackTrace();
                         errorMessage = "Autocomplete failed: Error fetching suggestion";
                         errorOccurred = true;
-                        currentSuggestions[i] = null;
+                        currentAutocompleteSuggestions[i] = null;
                     }
                 }
             } catch (Exception ex) {
@@ -616,17 +850,17 @@ public class TextEditor extends JTextPane {
             boolean finalErrorOccurred = errorOccurred; // Effectively final
 
             SwingUtilities.invokeLater(() -> {
-                if (!finalErrorOccurred) {
+                if (!finalErrorOccurred && !isRewritePopupActive) {
                     // Only show popup if no errors occurred and we have valid suggestions
                     boolean hasValidSuggestions = false;
-                    for(String s : currentSuggestions) {
+                    for(String s : currentAutocompleteSuggestions) {
                         if (s != null && !s.trim().isEmpty()) {
                             hasValidSuggestions = true;
                             break;
                         }
                     }
                     if (hasValidSuggestions) {
-                showAutoCompletePopup(currentSuggestions);
+                showAutoCompletePopup(currentAutocompleteSuggestions);
                     }
                 }
                 isAutocompleteActive = false;
@@ -680,41 +914,61 @@ public class TextEditor extends JTextPane {
         return suggestion;
     }
 
+    /**
+     * Displays the autocomplete suggestions in a popup menu.
+     */
     private void showAutoCompletePopup(String[] suggestions) {
+        if (prefs.isAiFeaturesDisabled() || suggestions == null || suggestions.length == 0) {
+            statusBar.setText("No suggestions available");
+            return;
+        }
+
+        // Store for later access by keyboard shortcuts
+        currentAutocompleteSuggestions = suggestions;
         autoCompletePopup.removeAll();
-        int validCount = 0;
+
         for (int i = 0; i < suggestions.length; i++) {
-            String s = suggestions[i];
-            if (s != null && !s.isEmpty()) {
-                validCount++;
-                final int idx = i;
-                JMenuItem item = new JMenuItem("ctrl+" + (i + 1) + ") " + s);
-                item.setFocusable(false);
-                item.addActionListener(e -> insertSuggestionAtCaret(suggestions[idx]));
+            if (suggestions[i] != null && !suggestions[i].trim().isEmpty()) {
+                final int index = i;
+                final String cleanedSuggestion = suggestions[i].trim();
+                final String displayText = "<html><b>Ctrl+" + (i + 1) + ":</b> " + 
+                                      cleanedSuggestion.replaceAll("\n", "<br/>") + "</html>";
+                
+                JMenuItem item = new JMenuItem(displayText);
+                item.setToolTipText("Press Ctrl+" + (i + 1) + " to select this option");
+                item.addActionListener(e -> insertAutocompleteSuggestion(cleanedSuggestion));
                 autoCompletePopup.add(item);
             }
         }
-        if (validCount == 0) return;
-        try {
-            int caretPos = getCaretPosition();
-            Rectangle r = modelToView(caretPos);
-            if (r != null) {
-                autoCompletePopup.show(this, r.x, r.y + r.height);
+
+        if (autoCompletePopup.getComponentCount() > 0) {
+            try {
+                Rectangle caretCoords = modelToView(getCaretPosition());
+                autoCompletePopup.show(this, caretCoords.x, caretCoords.y + caretCoords.height);
+                // Set flag before showing popup to ensure it's set when key is pressed
+                isAutocompleteActive = true;
+                
+                // Ensure popup maintains focus in the text editor
+                SwingUtilities.invokeLater(() -> {
+                    requestFocusInWindow();
+                    System.out.println("Autocomplete popup active: " + isAutocompleteActive + 
+                                      ", visible: " + autoCompletePopup.isVisible() + 
+                                      ", suggestions: " + (currentAutocompleteSuggestions != null ? 
+                                      currentAutocompleteSuggestions.length : "null"));
+                });
+                
+                statusBar.setText("Select suggestion with mouse or Ctrl+[1-" + 
+                                  Math.min(suggestions.length, 9) + "] | Esc to cancel");
+            } catch (BadLocationException e) {
+                e.printStackTrace();
+                statusBar.setText("Error showing suggestions.");
             }
-        } catch (BadLocationException ex) {
-            ex.printStackTrace();
+        } else {
+            statusBar.setText("No valid suggestions received.");
         }
     }
 
-    public void insertSuggestionByIndex(int idx) {
-        if (idx < 0 || idx >= currentSuggestions.length) return;
-        String suggestion = currentSuggestions[idx];
-        if (suggestion != null && !suggestion.isEmpty()) {
-            insertSuggestionAtCaret(suggestion);
-        }
-    }
-
-    public void insertSuggestionAtCaret(String suggestion) {
+    public void insertAutocompleteSuggestion(String suggestion) {
         if (suggestion == null || suggestion.isEmpty()) return;
 
         int caretPos = getCaretPosition();
@@ -744,7 +998,7 @@ public class TextEditor extends JTextPane {
         } catch (BadLocationException ex) {
             ex.printStackTrace();
             statusBar.setText("Error inserting suggestion.");
-        }
+        } finally { cancelAutoComplete(); }
     }
 
     // --- Paste and match style ---
@@ -1000,9 +1254,9 @@ public class TextEditor extends JTextPane {
         Action listAction = getActionByName("InsertOrderedList"); // Use String name
         if (listAction != null) {
             listAction.actionPerformed(new ActionEvent(this, ActionEvent.ACTION_PERFORMED, ""));
-            isDirty = true;
+                isDirty = true;
             requestFocusInWindow(); // Ensure focus remains
-        } else {
+            } else {
             System.err.println("Could not find InsertOrderedList action!");
         }
     }
@@ -1012,9 +1266,9 @@ public class TextEditor extends JTextPane {
         Action listAction = getActionByName("InsertUnorderedList"); // Use String name
         if (listAction != null) {
             listAction.actionPerformed(new ActionEvent(this, ActionEvent.ACTION_PERFORMED, ""));
-            isDirty = true;
+                isDirty = true;
             requestFocusInWindow(); // Ensure focus remains
-        } else {
+            } else {
             System.err.println("Could not find InsertUnorderedList action!");
         }
     }
@@ -1184,6 +1438,7 @@ public class TextEditor extends JTextPane {
 
      // --- Helper for Autocomplete Suppression ---
      private boolean isAnyDialogVisible() {
+         if (isRewritePopupActive) return true; // Check rewrite popup
          Window owner = SwingUtilities.getWindowAncestor(this);
          if (owner != null) {
              for (Window ownedWindow : owner.getOwnedWindows()) {
@@ -1218,52 +1473,387 @@ public class TextEditor extends JTextPane {
          return textOnly.split("\\s+").length;
     }
 
-    /**
-     * Replaces the currently selected text with the provided rewritten text.
-     * Tracks the change as AI-generated and adds it to the undo manager.
-     * @param rewriteText The text to replace the selection with.
-     */
-    public void replaceSelectionWithRewrite(String rewriteText) {
-        int start = getSelectionStart();
-        int end = getSelectionEnd();
+    // --- Rewrite Methods (New) --- 
 
-        if (start == end) {
-            // No selection, maybe insert instead?
-            // For now, just do nothing if there's no selection.
-            statusBar.setText("Rewrite requires a text selection.");
+    /**
+     * Sets up a global Escape key binding on the TextEditor component
+     * to cancel active popups like Autocomplete or Rewrite.
+     */
+    private void setupGlobalEscapeKey() {
+        InputMap inputMap = getInputMap(JComponent.WHEN_FOCUSED);
+        ActionMap actionMap = getActionMap();
+
+        KeyStroke escapeKeyStroke = KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0);
+        String actionKey = "cancelActivePopup";
+
+        inputMap.put(escapeKeyStroke, actionKey);
+        actionMap.put(actionKey, new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                System.out.println("Global Escape key handler triggered");
+                boolean popupCancelled = false;
+                if (isAutocompleteActive && autoCompletePopup.isVisible()) {
+                    System.out.println("Global Escape: Cancelling Autocomplete");
+                    cancelAutoComplete();
+                    popupCancelled = true;
+                }
+                // Check rewrite popup separately, ensuring it's visible
+                if (isRewritePopupActive && rewritePopup.isVisible()) {
+                    System.out.println("Global Escape: Cancelling Rewrite Popup");
+                    cancelRewritePopup();
+                    popupCancelled = true;
+                }
+                if (popupCancelled) {
+                    // Optionally provide feedback or consume the event if needed
+                    System.out.println("Popup cancelled via global Escape key handler");
+                } else {
+                     // If no popups were active, allow default Escape behavior (if any)
+                     System.out.println("No popups cancelled via global Escape - none were active/visible");
+                }
+            }
+        });
+        
+        // Also register Escape directly on both popups with WHEN_IN_FOCUSED_WINDOW
+        registerEscapeOnPopups();
+        
+        // Set up global Ctrl+number keys to work with both autocomplete and rewrite
+        for (int i = 1; i <= 9; i++) {
+            final int index = i - 1;
+            // Fix: use the actual number key codes directly, not arithmetic with VK_1
+            int keyCode;
+            switch (i) {
+                case 1: keyCode = KeyEvent.VK_1; break;
+                case 2: keyCode = KeyEvent.VK_2; break;
+                case 3: keyCode = KeyEvent.VK_3; break;
+                case 4: keyCode = KeyEvent.VK_4; break;
+                case 5: keyCode = KeyEvent.VK_5; break;
+                case 6: keyCode = KeyEvent.VK_6; break;
+                case 7: keyCode = KeyEvent.VK_7; break;
+                case 8: keyCode = KeyEvent.VK_8; break;
+                case 9: keyCode = KeyEvent.VK_9; break;
+                default: keyCode = KeyEvent.VK_1; // Should never happen
+            }
+            
+            // Create proper KeyStroke with correct modifier
+            KeyStroke ks = KeyStroke.getKeyStroke(keyCode, KeyEvent.CTRL_DOWN_MASK); 
+            String actionName = "selectSuggestion" + i;
+            
+            // Register on multiple input maps to ensure it's caught regardless of focus state
+            InputMap focusedMap = getInputMap(JComponent.WHEN_FOCUSED);
+            InputMap ancestorMap = getInputMap(JComponent.WHEN_ANCESTOR_OF_FOCUSED_COMPONENT);
+            InputMap windowMap = getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+            
+            focusedMap.put(ks, actionName);
+            ancestorMap.put(ks, actionName);
+            windowMap.put(ks, actionName);
+            
+            actionMap.put(actionName, new AbstractAction() {
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    // Detailed debugging of current state when key is pressed
+                    System.out.println("========================");
+                    System.out.println("Global Ctrl+" + (index + 1) + " caught: Processing suggestion selection");
+                    System.out.println("isRewritePopupActive: " + isRewritePopupActive);
+                    System.out.println("rewritePopup visible: " + (rewritePopup != null ? rewritePopup.isVisible() : "null"));
+                    System.out.println("currentRewriteSuggestions: " + (currentRewriteSuggestions != null ? 
+                                    "not null, size: " + currentRewriteSuggestions.size() : "null"));
+                    
+                    System.out.println("isAutocompleteActive: " + isAutocompleteActive);
+                    System.out.println("autoCompletePopup visible: " + (autoCompletePopup != null ? autoCompletePopup.isVisible() : "null"));
+                    System.out.println("currentAutocompleteSuggestions: " + (currentAutocompleteSuggestions != null ? 
+                                    "not null, length: " + currentAutocompleteSuggestions.length : "null"));
+                    
+                    // First try to force the popup to be visible if it's been lost
+                    if (isRewritePopupActive && !rewritePopup.isVisible() && currentRewriteSuggestions != null) {
+                        System.out.println("Reactivating rewrite popup that lost visibility");
+                        try {
+                            Rectangle r = modelToView(getSelectionStart());
+                            if (r != null) {
+                                rewritePopup.show(TextEditor.this, r.x, r.y + r.height + REWRITE_POPUP_VERTICAL_OFFSET);
+                            }
+                        } catch (Exception ex) {
+                            System.err.println("Error reshowing rewrite popup: " + ex.getMessage());
+                        }
+                    }
+                    
+                    if (isAutocompleteActive && !autoCompletePopup.isVisible() && currentAutocompleteSuggestions != null) {
+                        System.out.println("Reactivating autocomplete popup that lost visibility");
+                        try {
+                            Rectangle r = modelToView(getCaretPosition());
+                            if (r != null) {
+                                autoCompletePopup.show(TextEditor.this, r.x, r.y + r.height);
+                            }
+                        } catch (Exception ex) {
+                            System.err.println("Error reshowing autocomplete popup: " + ex.getMessage());
+                        }
+                    }
+                    
+                    // Handle either rewrite or autocomplete, prioritizing rewrite
+                    // For rewrite: First check if we have valid suggestions at the given index
+                    boolean hasValidRewriteSuggestion = isRewritePopupActive && 
+                            currentRewriteSuggestions != null && 
+                            index < currentRewriteSuggestions.size() &&
+                            currentRewriteSuggestions.get(index) != null && 
+                            !currentRewriteSuggestions.get(index).isEmpty();
+                    
+                    // For autocomplete: Check if we have valid suggestions at the given index
+                    boolean hasValidAutocompleteSuggestion = isAutocompleteActive && 
+                            currentAutocompleteSuggestions != null && 
+                            index < currentAutocompleteSuggestions.length &&
+                            currentAutocompleteSuggestions[index] != null && 
+                            !currentAutocompleteSuggestions[index].isEmpty();
+                    
+                    // Now try to apply the suggestions, prioritizing rewrite
+                    if (hasValidRewriteSuggestion) {
+                        System.out.println("Global Ctrl+" + (index + 1) + ": Selecting rewrite suggestion");
+                        insertRewriteSuggestion(currentRewriteSuggestions.get(index));
+                    } else if (hasValidAutocompleteSuggestion) {
+                        System.out.println("Global Ctrl+" + (index + 1) + ": Selecting autocomplete suggestion");
+                        insertAutocompleteSuggestion(currentAutocompleteSuggestions[index]);
+                    } else {
+                        System.out.println("Ctrl+" + (index + 1) + ": No active suggestions to select");
+                    }
+                    System.out.println("========================");
+                }
+            });
+        }
+    }
+    
+    /**
+     * Registers Escape key handlers directly on both popups
+     */
+    private void registerEscapeOnPopups() {
+        // For autocomplete popup
+        Action autocompleteEscapeAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                System.out.println("Autocomplete popup direct Escape handler triggered");
+                if (isAutocompleteActive) {
+                    cancelAutoComplete();
+                }
+            }
+        };
+        
+        // For rewrite popup
+        Action rewriteEscapeAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                System.out.println("Rewrite popup direct Escape handler triggered");
+                if (isRewritePopupActive) {
+                    cancelRewritePopup();
+                }
+            }
+        };
+        
+        // Register on both popups with WHEN_IN_FOCUSED_WINDOW
+        KeyStroke escKeyStroke = KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0);
+        
+        // For autocomplete
+        autoCompletePopup.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(escKeyStroke, "cancelAutocomplete");
+        autoCompletePopup.getActionMap().put("cancelAutocomplete", autocompleteEscapeAction);
+        
+        // For rewrite
+        rewritePopup.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW).put(escKeyStroke, "cancelRewrite");
+        rewritePopup.getActionMap().put("cancelRewrite", rewriteEscapeAction);
+    }
+    
+    /**
+     * Sets up the Escape key and Ctrl+<number> keys for the rewrite popup.
+     */
+    private void setupRewriteKeys() {
+        // Actions remain the same
+        Action cancelAction = new AbstractAction() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                System.out.println("Rewrite popup-specific Escape key action triggered.");
+                if (isRewritePopupActive) {
+                    System.out.println("Calling cancelRewritePopup().");
+                    cancelRewritePopup();
+                } else if (isAutocompleteActive) {
+                    // Keep the ability for Esc to cancel autocomplete if needed
+                    // but the primary binding for this action is on the rewrite popup
+                    System.out.println("Calling cancelAutoComplete() from rewrite binding (fallback).");
+                    cancelAutoComplete(); 
+                }
+            }
+        };
+
+        // Register Escape key directly on the popup so it can be closed by pressing Escape
+        InputMap popupInputMap = rewritePopup.getInputMap(JComponent.WHEN_IN_FOCUSED_WINDOW);
+        ActionMap popupActionMap = rewritePopup.getActionMap();
+
+        // Bind Escape Key to the popup
+        popupInputMap.put(KeyStroke.getKeyStroke(KeyEvent.VK_ESCAPE, 0), "cancelRewritePopup");
+        popupActionMap.put("cancelRewritePopup", cancelAction);
+
+        // Note: We don't register Ctrl+1-9 here anymore - they are handled by setupGlobalEscapeKey
+        // This method is kept for popup-specific keybindings (Escape key)
+    }
+
+    /**
+     * Displays the rewrite suggestions in a popup menu near the original selection.
+     *
+     * @param suggestions A list of rewrite suggestions.
+     */
+    public void showRewritePopup(List<String> suggestions) {
+        if (prefs.isAiFeaturesDisabled() || suggestions == null || suggestions.isEmpty()) {
+            statusBar.setText("No rewrite suggestions generated.");
+            return;
+        }
+        
+        cancelAutoComplete(); // Ensure autocomplete is hidden
+        cancelRewritePopup(); // Cancel any previous rewrite popup
+
+        currentRewriteSuggestions = new ArrayList<>(suggestions);
+        rewritePopup.removeAll();
+
+        for (int i = 0; i < currentRewriteSuggestions.size(); i++) {
+            String suggestion = currentRewriteSuggestions.get(i);
+            if (suggestion != null && !suggestion.isEmpty()) {
+                final int index = i;
+                // Use HTML for wrapping
+                String wrappedSuggestion = "<html><body style='width: 300px'>" + // Set a width for wrapping
+                                           "<b>Ctrl+" + (i + 1) + ":</b> " + 
+                                           suggestion.replaceAll("\n", "<br>") + // Replace newlines with <br>
+                                           "</body></html>";
+                                           
+                JMenuItem item = new JMenuItem(wrappedSuggestion);
+                // Make menu items focusable for keyboard navigation
+                item.setFocusable(true);
+                item.setToolTipText("Press Ctrl+" + (i + 1) + " to select this option");
+                item.addActionListener(e -> insertRewriteSuggestion(currentRewriteSuggestions.get(index)));
+                rewritePopup.add(item);
+            }
+        }
+
+        if (rewritePopup.getComponentCount() == 0) {
+            statusBar.setText("No valid rewrite suggestions found.");
+            return;
+        }
+
+        try {
+            rewriteSelectionStart = getSelectionStart();
+            rewriteSelectionEnd = getSelectionEnd();
+            if (rewriteSelectionStart == rewriteSelectionEnd) { 
+                statusBar.setText("No text selected for rewrite.");
+                return; 
+            } 
+
+            Rectangle r = modelToView(rewriteSelectionStart);
+            if (r != null) {
+                // Set active flag BEFORE showing the popup
+                isRewritePopupActive = true;
+                
+                // Show the popup
+                rewritePopup.show(this, r.x, r.y + r.height + REWRITE_POPUP_VERTICAL_OFFSET);
+                
+                // Ensure popup maintains focus in the text editor and debug popup state
+                SwingUtilities.invokeLater(() -> {
+                    requestFocusInWindow();
+                    System.out.println("Rewrite popup active: " + isRewritePopupActive + 
+                                      ", visible: " + rewritePopup.isVisible() + 
+                                      ", suggestions: " + (currentRewriteSuggestions != null ? 
+                                      currentRewriteSuggestions.size() : "null"));
+                });
+                
+                statusBar.setText("Rewrite suggestions available. Press Ctrl+[1-" + currentRewriteSuggestions.size() + "] or Esc.");
+            } else {
+                 // Fallback positioning
+                 isRewritePopupActive = true;
+                 rewritePopup.show(this, 100, 100 + REWRITE_POPUP_VERTICAL_OFFSET);
+                 
+                 // Debug popup state
+                 SwingUtilities.invokeLater(() -> {
+                     requestFocusInWindow();
+                     System.out.println("Rewrite popup (fallback) active: " + isRewritePopupActive + 
+                                       ", visible: " + rewritePopup.isVisible());
+                 });
+                 
+                 statusBar.setText("Rewrite suggestions available (popup position approximate). Press Ctrl+[1-" + currentRewriteSuggestions.size() + "] or Esc.");
+            }
+        } catch (BadLocationException ex) {
+            ex.printStackTrace();
+            statusBar.setText("Error showing rewrite popup.");
+        }
+    }
+
+    /**
+     * Replaces the original selection with the chosen rewrite suggestion.
+     * Handles undo/redo.
+     *
+     * @param suggestion The chosen rewrite text.
+     */
+    public void insertRewriteSuggestion(String suggestion) {
+        if (suggestion == null || suggestion.isEmpty() || rewriteSelectionStart < 0 || rewriteSelectionEnd < 0 || rewriteSelectionStart == rewriteSelectionEnd) {
+            cancelRewritePopup();
             return;
         }
 
         try {
             StyledDocument sdoc = (StyledDocument) getDocument();
-            // Get attributes from the start of the selection to apply to the new text
-            AttributeSet attrs = sdoc.getCharacterElement(start).getAttributes();
+            AttributeSet attrs = sdoc.getCharacterElement(rewriteSelectionStart).getAttributes();
+            int originalLength = rewriteSelectionEnd - rewriteSelectionStart;
 
-            // Record edit for undo
-            undoManager.addEdit(new ReplaceEdit(sdoc, start, end - start, rewriteText, attrs));
+            // Use the existing ReplaceEdit helper class for undo/redo
+            ReplaceEdit edit = new ReplaceEdit(sdoc, rewriteSelectionStart, originalLength, suggestion, attrs);
+            
+            sdoc.remove(rewriteSelectionStart, originalLength);
+            sdoc.insertString(rewriteSelectionStart, suggestion, attrs);
+            undoManager.addEdit(edit);
 
-            // Perform replacement
-            sdoc.remove(start, end - start);
-            sdoc.insertString(start, rewriteText, attrs);
-
-            // Update stats and state
-            aiCharCount += rewriteText.length(); // Attribute change to AI
+            aiCharCount += suggestion.length(); 
             isDirty = true;
             updateStatusBarInfo();
-            statusBar.setText("Text rewritten.");
-
-            // Optionally, select the newly inserted text
-            // setSelectionStart(start);
-            // setSelectionEnd(start + rewriteText.length());
+            statusBar.setText("Rewrite applied.");
 
         } catch (BadLocationException ex) {
             ex.printStackTrace();
-            statusBar.setText("Error applying rewrite: " + ex.getMessage());
+            statusBar.setText("Error applying rewrite suggestion: " + ex.getMessage());
+        } finally {
+            cancelRewritePopup();
         }
     }
 
+    /**
+     * Cancels the rewrite suggestion popup and resets its state.
+     */
+    public void cancelRewritePopup() {
+        // Make sure rewritePopup exists before trying to hide it
+        if (isRewritePopupActive && rewritePopup != null) {
+            rewritePopup.setVisible(false);
+            isRewritePopupActive = false;
+            currentRewriteSuggestions = null;
+            rewriteSelectionStart = -1;
+            rewriteSelectionEnd = -1;
+            statusBar.setText("Rewrite cancelled."); // Provide feedback
+            updateStatusBarInfo(); // Refresh status bar in case it showed suggestion count
+        } else {
+             // If not active, ensure flag is false just in case
+             isRewritePopupActive = false;
+        }
+    }
+
+    // --- Overridden replaceSelectionWithRewrite (Now delegates to popup) ---
+    /**
+     * @deprecated Use showRewritePopup instead to display suggestions.
+     */
+    @Deprecated
+    public void replaceSelectionWithRewrite(String rewriteText) {
+        // This method is kept temporarily for compatibility but shouldn't be called directly.
+        // The flow now goes through Syngrafi -> RewriteManager -> showRewritePopup -> insertRewriteSuggestion.
+        System.err.println("Warning: replaceSelectionWithRewrite called directly. Flow should use showRewritePopup.");
+        // For safety, maybe call insertRewriteSuggestion if needed, but it lacks context.
+         if (getSelectionStart() != getSelectionEnd()) {
+             rewriteSelectionStart = getSelectionStart();
+             rewriteSelectionEnd = getSelectionEnd();
+             insertRewriteSuggestion(rewriteText); // Risky without proper setup
+         } else {
+             statusBar.setText("Rewrite requires selection (legacy call).");
+         }
+    }
+
     // Helper class for Undoable Edits during replacement
-    private static class ReplaceEdit extends javax.swing.undo.AbstractUndoableEdit {
+    private static class ReplaceEdit extends AbstractUndoableEdit {
         private final StyledDocument document;
         private final int offset;
         private final String oldText;
@@ -1276,9 +1866,11 @@ public class TextEditor extends JTextPane {
             this.newText = replacement;
             this.attributes = attrs;
             try {
+                // Get the text *before* removal
                 this.oldText = doc.getText(offs, len);
             } catch (BadLocationException e) {
-                throw new RuntimeException("Error creating undo edit", e); // Should not happen
+                // This should ideally not happen if offsets/len are correct
+                throw new RuntimeException("Error creating undo edit: Cannot get old text at offset " + offs + " len " + len, e);
             }
         }
 
@@ -1306,7 +1898,22 @@ public class TextEditor extends JTextPane {
 
         @Override
         public String getPresentationName() {
-            return "Rewrite Selection";
+            return "Rewrite Selection"; // Or be more specific
         }
+    }
+
+    /**
+     * Inserts the autocomplete suggestion corresponding to the given index.
+     * Called by keyboard shortcuts (Ctrl+1, etc.).
+     * Ensures the method is public and accessible.
+     */
+    public void insertSuggestionByIndex(int idx) { // For Autocomplete
+         if (isRewritePopupActive) return; // Don't act if rewrite popup is active
+         if (idx < 0 || currentAutocompleteSuggestions == null || idx >= currentAutocompleteSuggestions.length) return;
+         
+         String suggestion = currentAutocompleteSuggestions[idx];
+         if (suggestion != null && !suggestion.isEmpty()) {
+             insertAutocompleteSuggestion(suggestion); // Call the insertion logic
+         }
     }
 }

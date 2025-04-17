@@ -10,10 +10,11 @@ public class SettingsDialog extends JDialog {
     private JTextField geminiKeyField;
     private JComboBox<String> providerComboBox;
     private JComboBox<String> modelComboBox;
-    private JTextField numSuggestionsField;
+    private JTextField numAutocompleteSuggestionsField;
     private JTextField defaultPathField;
     private JTextField autocompleteDelayField;
     private JComboBox<String> themeComboBox;
+    private JCheckBox disableAiCheckbox;
 
     // Autocomplete tab panel
     private JPanel autocompletePanel;
@@ -27,11 +28,12 @@ public class SettingsDialog extends JDialog {
 
     // Rewrite Tab components
     private JTextArea defaultRewritePromptArea;
+    private JTextField numRewriteSuggestionsField;
 
     public SettingsDialog(JFrame parent, PreferencesManager preferencesManager) {
         super(parent, "Settings", true);
         this.preferencesManager = preferencesManager;
-        setSize(600, 450);
+        setSize(600, 500);
         setLocationRelativeTo(parent);
         setLayout(new BorderLayout());
 
@@ -39,15 +41,12 @@ public class SettingsDialog extends JDialog {
         JPanel generalTab = createGeneralTab();
         tabbedPane.addTab("General", generalTab);
 
-        autocompletePanel = new JPanel();
-        autocompletePanel.setLayout(new BoxLayout(autocompletePanel, BoxLayout.Y_AXIS));
-        autocompleteScroll = new JScrollPane(autocompletePanel);
-        tabbedPane.addTab("Autocomplete", autocompleteScroll);
+        JPanel autocompleteTab = createAutocompleteTab();
+        tabbedPane.addTab("Autocomplete", autocompleteTab);
 
         JPanel aiSettingsTab = createAISettingsTab();
         tabbedPane.addTab("AI Settings", aiSettingsTab);
 
-        // Add Rewrite Tab
         JPanel rewriteTab = createRewriteTab();
         tabbedPane.addTab("Rewrite", rewriteTab);
 
@@ -67,56 +66,94 @@ public class SettingsDialog extends JDialog {
         add(bottomPanel, BorderLayout.SOUTH);
 
         loadPreferences();
-        refreshAutocompletePrompts();
     }
 
 
     private JPanel createGeneralTab() {
-        JPanel panel = new JPanel(new GridLayout(0, 2, 10, 10));
+        JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0; gbc.gridy = 0; gbc.anchor = GridBagConstraints.WEST; gbc.insets = new Insets(2, 5, 2, 5);
 
-        // OpenAI key
-        panel.add(new JLabel("OpenAI API Key:"));
+        // Row 0: OpenAI Key
+        panel.add(new JLabel("OpenAI API Key:"), gbc);
+        gbc.gridx++; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         openAIKeyField = new JTextField(20);
-        panel.add(openAIKeyField);
+        panel.add(openAIKeyField, gbc);
 
-        // Gemini key
-        panel.add(new JLabel("Gemini API Key:"));
+        // Row 1: Gemini Key
+        gbc.gridx = 0; gbc.gridy++; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0.0;
+        panel.add(new JLabel("Gemini API Key:"), gbc);
+        gbc.gridx++; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         geminiKeyField = new JTextField(20);
-        panel.add(geminiKeyField);
+        panel.add(geminiKeyField, gbc);
 
-        // Provider
-        panel.add(new JLabel("Provider:"));
+        // Row 2: Provider
+        gbc.gridx = 0; gbc.gridy++; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0.0;
+        panel.add(new JLabel("API Provider:"), gbc);
+        gbc.gridx++; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
         providerComboBox = new JComboBox<>(new String[]{"OpenAI", "Google Gemini"});
-        panel.add(providerComboBox);
-
-        // Model
-        panel.add(new JLabel("Model:"));
-        modelComboBox = new JComboBox<>();
-        panel.add(modelComboBox);
-
-        // Number of suggestions
-        panel.add(new JLabel("Num Suggestions:"));
-        numSuggestionsField = new JTextField(4);
-        panel.add(numSuggestionsField);
-
-        // Default file path
-        panel.add(new JLabel("Default Path:"));
-        defaultPathField = new JTextField(20);
-        panel.add(defaultPathField);
-
-        // Autocomplete Delay
-        panel.add(new JLabel("Autocomplete Delay (ms):"));
-        autocompleteDelayField = new JTextField(6);
-        panel.add(autocompleteDelayField);
-
-        // Theme selection
-        panel.add(new JLabel("Theme:"));
-        themeComboBox = new JComboBox<>(new String[]{"System", "Light", "Dark"});
-        panel.add(themeComboBox);
-
         providerComboBox.addActionListener(e -> updateModelComboBox());
+        panel.add(providerComboBox, gbc);
+
+        // Row 3: Model
+        gbc.gridx = 0; gbc.gridy++; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0.0;
+        panel.add(new JLabel("Model:"), gbc);
+        gbc.gridx++; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        modelComboBox = new JComboBox<>();
+        panel.add(modelComboBox, gbc);
+
+        // Row 4: Default Path
+        gbc.gridx = 0; gbc.gridy++; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0.0;
+        panel.add(new JLabel("Default Path:"), gbc);
+        gbc.gridx++; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        defaultPathField = new JTextField(20);
+        panel.add(defaultPathField, gbc);
+        // Add browse button? (Optional)
+
+        // Row 5: Theme
+        gbc.gridx = 0; gbc.gridy++; gbc.fill = GridBagConstraints.NONE; gbc.weightx = 0.0;
+        panel.add(new JLabel("Theme:"), gbc);
+        gbc.gridx++; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        themeComboBox = new JComboBox<>(new String[]{"System", "Light", "Dark"});
+        panel.add(themeComboBox, gbc);
+        
+        // Row 6: AI Cutoff Checkbox
+        gbc.gridx = 0; gbc.gridy++; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        disableAiCheckbox = new JCheckBox("Disable ALL AI Features (Autocomplete, Rewrite, etc.)");
+        panel.add(disableAiCheckbox, gbc);
+
         return panel;
+    }
+
+    private JPanel createAutocompleteTab() {
+        JPanel containerPanel = new JPanel(new BorderLayout(10, 10));
+        containerPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        // Panel for settings at the top
+        JPanel topSettingsPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        topSettingsPanel.add(new JLabel("Autocomplete Delay (ms):"));
+        autocompleteDelayField = new JTextField(6);
+        topSettingsPanel.add(autocompleteDelayField);
+        topSettingsPanel.add(Box.createHorizontalStrut(20)); // Spacer
+        topSettingsPanel.add(new JLabel("Number of Suggestions:"));
+        numAutocompleteSuggestionsField = new JTextField(4);
+        numAutocompleteSuggestionsField.addFocusListener(new FocusAdapter() {
+            @Override
+            public void focusLost(FocusEvent e) {
+                refreshAutocompletePrompts();
+            }
+        });
+        topSettingsPanel.add(numAutocompleteSuggestionsField);
+        containerPanel.add(topSettingsPanel, BorderLayout.NORTH);
+
+        // Panel for the dynamic prompts list
+        autocompletePanel = new JPanel();
+        autocompletePanel.setLayout(new BoxLayout(autocompletePanel, BoxLayout.Y_AXIS));
+        autocompleteScroll = new JScrollPane(autocompletePanel);
+        containerPanel.add(autocompleteScroll, BorderLayout.CENTER);
+
+        return containerPanel;
     }
 
     private void updateModelComboBox() {
@@ -124,62 +161,53 @@ public class SettingsDialog extends JDialog {
         modelComboBox.removeAllItems();
         if ("OpenAI".equals(provider)) {
             modelComboBox.addItem("gpt-4o");
-            modelComboBox.addItem("gpt-3.5-turbo");
+            modelComboBox.addItem("gpt-4.1");
+            modelComboBox.addItem("gpt-4.1-mini");
+            modelComboBox.addItem("gpt-4.1-nano");
         } else {
-            modelComboBox.addItem("gemini-2.0-flash");
             modelComboBox.addItem("gemini-2.0-flash-lite");
-            modelComboBox.addItem("gemini-pro");
+            modelComboBox.addItem("gemini-2.0-flash");
         }
     }
 
     private void loadPreferences() {
-        String openAIKey = preferencesManager.getApiKey("apiKeyOpenAI");
-        String geminiKey = preferencesManager.getApiKey("apiKeyGemini");
+        openAIKeyField.setText(preferencesManager.getApiKey("apiKeyOpenAI"));
+        geminiKeyField.setText(preferencesManager.getApiKey("apiKeyGemini"));
         String provider = preferencesManager.getPreference("provider", "OpenAI");
-        String model = preferencesManager.getPreference("model",
-                provider.equals("OpenAI") ? "gpt-4o" : "gemini-2.0-flash");
-        String numSuggestions = preferencesManager.getPreference("numSuggestions", "3");
-        String defaultPath = preferencesManager.getDefaultPath();
-        String delay = preferencesManager.getPreference("autocompleteDelay", "1000");
-        String theme = preferencesManager.getPreference("theme", "System");
-
-        openAIKeyField.setText(openAIKey);
-        geminiKeyField.setText(geminiKey);
         providerComboBox.setSelectedItem(provider);
         updateModelComboBox();
+        String model = preferencesManager.getPreference("model", provider.equals("OpenAI") ? "gpt-4o" : "gemini-1.5-flash");
         modelComboBox.setSelectedItem(model);
-        numSuggestionsField.setText(numSuggestions);
-        defaultPathField.setText(defaultPath);
-        autocompleteDelayField.setText(delay);
+        defaultPathField.setText(preferencesManager.getDefaultPath());
+        String theme = preferencesManager.getPreference("theme", "System");
         themeComboBox.setSelectedItem(theme);
         initialThemeValue = theme;
+        disableAiCheckbox.setSelected(preferencesManager.isAiFeaturesDisabled());
 
-        // Load AI settings (into fields created in createAISettingsTab)
+        autocompleteDelayField.setText(preferencesManager.getPreference("autocompleteDelay", "1000"));
+        numAutocompleteSuggestionsField.setText(preferencesManager.getPreference("numSuggestions", "3"));
+        refreshAutocompletePrompts();
+
         generalStylePromptArea.setText(preferencesManager.getPreference("generalStylePrompt", ""));
         maxLengthField.setText(preferencesManager.getPreference("autocompleteMaxLength", "200"));
         aiReferencesArea.setText(preferencesManager.getAIReferences());
 
-        // Load Rewrite setting (into the new text area)
+        numRewriteSuggestionsField.setText(String.valueOf(preferencesManager.getNumRewriteSuggestions()));
         defaultRewritePromptArea.setText(preferencesManager.getDefaultRewritePrompt());
     }
 
-    /**
-     * Builds the "Autocomplete" tab UI, showing text fields for each prompt.
-     * We read numSuggestions from the user, then create that many text fields.
-     */
     private void refreshAutocompletePrompts() {
+        if (autocompletePanel == null) return;
         autocompletePanel.removeAll();
-
         int n;
         try {
-            n = Integer.parseInt(numSuggestionsField.getText().trim());
-        } catch (NumberFormatException ex) {
+            n = Integer.parseInt(numAutocompleteSuggestionsField.getText().trim());
+        } catch (NumberFormatException | NullPointerException ex) {
             n = 3;
         }
-        if (n < 1) n = 1;
-        if (n > 10) n = 10; // let's cap it at 10
+        n = Math.max(1, Math.min(10, n));
+        numAutocompleteSuggestionsField.setText(String.valueOf(n));
 
-        // For each suggestion index i, load from preferences
         for (int i = 1; i <= n; i++) {
             String storedPrompt = preferencesManager.getPreference(
                     "autocompletePrompt" + i,
@@ -188,22 +216,19 @@ public class SettingsDialog extends JDialog {
             JPanel row = new JPanel(new BorderLayout(5, 5));
             row.setBorder(BorderFactory.createEmptyBorder(5,5,5,5));
             row.add(new JLabel("Prompt #" + i + ":"), BorderLayout.WEST);
-
             JTextField promptField = new JTextField(storedPrompt);
             row.add(promptField, BorderLayout.CENTER);
-
-            // store in the component's client property so we can fetch it later
             promptField.putClientProperty("promptIndex", i);
             autocompletePanel.add(row);
         }
-        // Repack the panel
         autocompletePanel.revalidate();
         autocompletePanel.repaint();
+        if (autocompleteScroll != null) {
+            autocompleteScroll.revalidate();
+            autocompleteScroll.repaint();
+        }
     }
 
-    /**
-     * Default fallback prompts for each index, matching the old switch(variation) style
-     */
     private String defaultPromptForIndex(int i) {
         switch (i) {
             case 1: return "Provide the most likely next phrase.";
@@ -213,48 +238,25 @@ public class SettingsDialog extends JDialog {
     }
 
     private void saveSettings(boolean disposeAfter) {
-        // Save general settings
-        String openAIKey = openAIKeyField.getText().trim();
-        String geminiKey = geminiKeyField.getText().trim();
-        // Use setPreference for API keys as it handles routing to secureProperties
-        preferencesManager.setPreference("apiKeyOpenAI", openAIKey);
-        preferencesManager.setPreference("apiKeyGemini", geminiKey);
-
+        preferencesManager.setPreference("apiKeyOpenAI", openAIKeyField.getText().trim());
+        preferencesManager.setPreference("apiKeyGemini", geminiKeyField.getText().trim());
         String provider = (String) providerComboBox.getSelectedItem();
-        String model = (String) modelComboBox.getSelectedItem();
         preferencesManager.setPreference("provider", provider);
+        String model = (String) modelComboBox.getSelectedItem();
         preferencesManager.setPreference("model", model);
-
-        String numSuggestionsVal = numSuggestionsField.getText().trim();
-        int n = 3;
-        try { n = Math.max(1, Math.min(10, Integer.parseInt(numSuggestionsVal))); } catch (NumberFormatException ex) { n = 3; }
-        preferencesManager.setPreference("numSuggestions", String.valueOf(n));
-
         String defaultPath = defaultPathField.getText().trim();
         if (defaultPath.isEmpty()) { defaultPath = System.getProperty("user.dir"); }
-        // Use setPreference for default path
         preferencesManager.setPreference("defaultPath", defaultPath);
-
-        String delayVal = autocompleteDelayField.getText().trim();
-        int delay = 1000;
-        try { delay = Integer.parseInt(delayVal); if (delay < 0) delay = 1000; } catch (NumberFormatException ex) { delay = 1000; }
-        preferencesManager.setPreference("autocompleteDelay", String.valueOf(delay));
-
         String theme = (String) themeComboBox.getSelectedItem();
         preferencesManager.setPreference("theme", theme);
+        preferencesManager.setAiFeaturesDisabled(disableAiCheckbox.isSelected());
 
-        // Save AI settings
-        preferencesManager.setPreference("generalStylePrompt", generalStylePromptArea.getText().trim());
-        String maxLengthStr = maxLengthField.getText().trim();
-        int maxLengthVal = 200;
-        try { maxLengthVal = Integer.parseInt(maxLengthStr); if (maxLengthVal < 10) maxLengthVal = 10; if (maxLengthVal > 1000) maxLengthVal = 1000; } catch (NumberFormatException ex) { maxLengthVal = 200; }
-        preferencesManager.setPreference("autocompleteMaxLength", String.valueOf(maxLengthVal));
-        preferencesManager.setAIReferences(aiReferencesArea.getText().trim()); // Uses specific setter
-
-        // Save Rewrite setting (from the new text area)
-        preferencesManager.setDefaultRewritePrompt(defaultRewritePromptArea.getText().trim());
-
-        // Save autocomplete prompts
+        int delay = 1000;
+        try { delay = Integer.parseInt(autocompleteDelayField.getText().trim()); if (delay < 0) delay = 1000; } catch (NumberFormatException ex) { delay = 1000; }
+        preferencesManager.setPreference("autocompleteDelay", String.valueOf(delay));
+        int numAutoSuggest = 3;
+        try { numAutoSuggest = Math.max(1, Math.min(10, Integer.parseInt(numAutocompleteSuggestionsField.getText().trim()))); } catch (NumberFormatException ex) { numAutoSuggest = 3; }
+        preferencesManager.setPreference("numSuggestions", String.valueOf(numAutoSuggest));
         Component[] rows = autocompletePanel.getComponents();
         for (Component comp : rows) {
             if (comp instanceof JPanel) {
@@ -274,9 +276,19 @@ public class SettingsDialog extends JDialog {
             }
         }
 
+        preferencesManager.setPreference("generalStylePrompt", generalStylePromptArea.getText().trim());
+        int maxLengthVal = 200;
+        try { maxLengthVal = Integer.parseInt(maxLengthField.getText().trim()); if (maxLengthVal < 10) maxLengthVal = 10; if (maxLengthVal > 1000) maxLengthVal = 1000; } catch (NumberFormatException ex) { maxLengthVal = 200; }
+        preferencesManager.setPreference("autocompleteMaxLength", String.valueOf(maxLengthVal));
+        preferencesManager.setAIReferences(aiReferencesArea.getText().trim());
+
+        int numRewriteSuggest = 2;
+        try { numRewriteSuggest = Math.max(1, Math.min(5, Integer.parseInt(numRewriteSuggestionsField.getText().trim()))); } catch (NumberFormatException ex) { numRewriteSuggest = 2; }
+        preferencesManager.setNumRewriteSuggestions(numRewriteSuggest);
+        preferencesManager.setDefaultRewritePrompt(defaultRewritePromptArea.getText().trim());
+
         preferencesManager.savePreferences();
 
-        // --- Theme Change Check ---
         String newTheme = (String) themeComboBox.getSelectedItem();
         if (initialThemeValue != null && !initialThemeValue.equals(newTheme)) {
             JOptionPane.showMessageDialog(this,
@@ -286,14 +298,15 @@ public class SettingsDialog extends JDialog {
             initialThemeValue = newTheme;
         }
 
-        // Update the main frame's API provider
         if (getParent() instanceof Syngrafi) {
-            ((Syngrafi) getParent()).updateAPIProvider(
-                preferencesManager.getApiKey("apiKeyOpenAI"), // Fetch updated keys
+            Syngrafi mainFrame = (Syngrafi) getParent();
+            mainFrame.updateAPIProvider(
+                preferencesManager.getApiKey("apiKeyOpenAI"),
                 preferencesManager.getApiKey("apiKeyGemini"),
                 provider,
                 model
             );
+            mainFrame.applySettings();
         }
 
         if (disposeAfter) {
@@ -349,16 +362,25 @@ public class SettingsDialog extends JDialog {
     }
 
     private JPanel createRewriteTab() {
-        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0; gbc.gridy = 0; gbc.anchor = GridBagConstraints.WEST; gbc.insets = new Insets(5, 5, 5, 5);
 
-        panel.add(new JLabel("Default Rewrite Prompt:", SwingConstants.LEFT), BorderLayout.NORTH);
+        panel.add(new JLabel("Number of Rewrite Suggestions:"), gbc);
+        gbc.gridx++; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.weightx = 1.0;
+        numRewriteSuggestionsField = new JTextField(4);
+        panel.add(numRewriteSuggestionsField, gbc);
+        gbc.weightx = 0.0;
 
+        gbc.gridx = 0; gbc.gridy++; gbc.gridwidth = 2; gbc.fill = GridBagConstraints.HORIZONTAL;
+        panel.add(new JLabel("Default Rewrite Prompt:", SwingConstants.LEFT), gbc);
+        gbc.gridy++; gbc.weighty = 1.0; gbc.fill = GridBagConstraints.BOTH;
         defaultRewritePromptArea = new JTextArea(10, 40);
         defaultRewritePromptArea.setLineWrap(true);
         defaultRewritePromptArea.setWrapStyleWord(true);
         JScrollPane scrollPane = new JScrollPane(defaultRewritePromptArea);
-        panel.add(scrollPane, BorderLayout.CENTER);
+        panel.add(scrollPane, gbc);
 
         return panel;
     }

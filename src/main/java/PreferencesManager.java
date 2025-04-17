@@ -30,6 +30,8 @@ public class PreferencesManager {
     private static final String DEFAULT_REWRITE_PROMPT = "defaultRewritePrompt";
     private static final String ENCRYPTED_API_KEY = "x249refElwgeew34sf";
     private static final String AI_REFERENCES = "aiReferences";
+    private static final String NUM_REWRITE_SUGGESTIONS = "numRewriteSuggestions";
+    private static final String AI_FEATURES_DISABLED = "aiFeaturesDisabled";
 
     public PreferencesManager() {
         prefsNode = Preferences.userRoot().node(PREFS_NODE_PATH);
@@ -92,6 +94,12 @@ public class PreferencesManager {
             secureProperties.store(fos, "Syngrafi API Keys");
         } catch (IOException e) {
             System.err.println("Error saving secure properties to " + securePropsFilePath);
+        }
+        
+        try {
+            prefsNode.flush();
+        } catch (BackingStoreException e) {
+            System.err.println("Error flushing Java preferences node: " + e.getMessage());
         }
     }
 
@@ -237,5 +245,21 @@ public class PreferencesManager {
     public void clearApiKey() {
         prefsNode.remove(ENCRYPTED_API_KEY);
         System.out.println("Stored API key cleared.");
+    }
+
+    public int getNumRewriteSuggestions() {
+        return prefsNode.getInt(NUM_REWRITE_SUGGESTIONS, 2);
+    }
+
+    public void setNumRewriteSuggestions(int num) {
+        prefsNode.putInt(NUM_REWRITE_SUGGESTIONS, num);
+    }
+
+    public boolean isAiFeaturesDisabled() {
+        return prefsNode.getBoolean(AI_FEATURES_DISABLED, false);
+    }
+
+    public void setAiFeaturesDisabled(boolean disabled) {
+        prefsNode.putBoolean(AI_FEATURES_DISABLED, disabled);
     }
 }

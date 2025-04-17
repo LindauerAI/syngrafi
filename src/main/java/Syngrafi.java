@@ -37,6 +37,8 @@ public class Syngrafi extends JFrame {
 
     private FindReplaceDialog findReplaceDialogInstance = null;
     private RewriteManager rewriteManager;
+    private JMenuItem rewriteMenuItem;
+    private JButton rewriteToolbarButton;
 
     public Syngrafi() {
         super("Syngrafi");
@@ -63,13 +65,19 @@ public class Syngrafi extends JFrame {
         addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
-                if (checkUnsavedChanges()) {
+                System.out.println("windowClosing event triggered."); // Debug
+                boolean shouldProceed = checkUnsavedChanges();
+                System.out.println("checkUnsavedChanges returned: " + shouldProceed); // Debug
+                if (shouldProceed) {
+                    System.out.println("Proceeding with close operations (dispose/exit)."); // Debug
                     // Shutdown background tasks before exiting
                     if (sidebarPanel != null) {
                         sidebarPanel.stopUpdateTimer();
                     }
                     dispose();
                     System.exit(0);
+                } else {
+                     System.out.println("Close operation cancelled by user or checkUnsavedChanges."); // Debug
                 }
             }
         });
@@ -169,10 +177,10 @@ public class Syngrafi extends JFrame {
         findReplaceItem.addActionListener(e -> showFindReplaceDialog());
         editMenu.add(findReplaceItem);
 
-        JMenuItem rewriteItem = new JMenuItem("Rewrite Selection...");
-        rewriteItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_R, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
-        rewriteItem.addActionListener(e -> triggerRewriteSelection());
-        editMenu.add(rewriteItem);
+        rewriteMenuItem = new JMenuItem("Rewrite Selection...");
+        rewriteMenuItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_R, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
+        rewriteMenuItem.addActionListener(e -> triggerRewriteSelection());
+        editMenu.add(rewriteMenuItem);
 
         menuBar.add(editMenu); 
         // --- End Edit Menu ---
@@ -193,6 +201,8 @@ public class Syngrafi extends JFrame {
         menuBar.add(helpMenu);
 
         setJMenuBar(menuBar);
+        
+        applySettings();
     }
 
     private void createTopPanel() {
@@ -309,10 +319,19 @@ public class Syngrafi extends JFrame {
 
         toolBar.add(Box.createHorizontalStrut(550));
 
+        // Add rewrite button to toolbar (example, requires icon)
+        /* 
+        rewriteToolbarButton = new JButton("Rewrite"); // Add icon later
+        rewriteToolbarButton.setToolTipText("Rewrite Selection (Ctrl+R)");
+        rewriteToolbarButton.addActionListener(e -> triggerRewriteSelection());
+        toolBar.add(rewriteToolbarButton); 
+        */
 
         // Add toolbar to the center of the BorderLayout panel
         topPanel.add(toolBar, BorderLayout.CENTER); 
         add(topPanel, BorderLayout.NORTH);
+        
+        applySettings();
     }
 
     private void createEditorPanel() {
@@ -487,17 +506,30 @@ public class Syngrafi extends JFrame {
 
     private boolean checkUnsavedChanges() {
         if (textEditor.isDirty()) {
+            System.out.println("checkUnsavedChanges: Document is dirty, showing dialog.");
             int option = JOptionPane.showConfirmDialog(this,
                     "You have unsaved changes. Save now?",
                     "Unsaved Changes",
                     JOptionPane.YES_NO_CANCEL_OPTION,
                     JOptionPane.WARNING_MESSAGE);
-            if (option == JOptionPane.CANCEL_OPTION) {
+            
+            System.out.println("checkUnsavedChanges: Dialog returned option: " + option + 
+                               " (YES=" + JOptionPane.YES_OPTION + ", NO=" + JOptionPane.NO_OPTION + 
+                               ", CANCEL=" + JOptionPane.CANCEL_OPTION + ", CLOSED=" + JOptionPane.CLOSED_OPTION + ")");
+                               
+            if (option == JOptionPane.YES_OPTION) {
+                boolean saved = saveDocument();
+                System.out.println("checkUnsavedChanges: User chose YES, saveDocument returned: " + saved);
+                return saved;
+            } else if (option == JOptionPane.NO_OPTION) {
+                System.out.println("checkUnsavedChanges: User chose NO, returning true.");
+                return true;
+            } else {
+                System.out.println("checkUnsavedChanges: User chose CANCEL/CLOSED, returning false.");
                 return false;
-            } else if (option == JOptionPane.YES_OPTION) {
-                saveDocument();
             }
         }
+        System.out.println("checkUnsavedChanges: Document is not dirty, returning true.");
         return true;
     }
 
@@ -543,57 +575,103 @@ public class Syngrafi extends JFrame {
         textEditor.updateStatusBarInfo(); 
     }
 
-    public void saveDocument() {
+    /** Saves the current document. Returns true if successful, false otherwise. */
+    public boolean saveDocument() {
         if (currentFile == null) {
-            JFileChooser chooser = new JFileChooser();
-            chooser.setCurrentDirectory(getDefaultDirectory());
-            int result = chooser.showSaveDialog(this);
-            if (result == JFileChooser.APPROVE_OPTION) {
-                currentFile = chooser.getSelectedFile();
-                if (!currentFile.getName().toLowerCase().endsWith(".html")) {
-                    currentFile = new File(currentFile.getAbsolutePath() + ".html");
-                }
-                if (creationTimestamp == 0) {
-                    creationTimestamp = System.currentTimeMillis();
-                }
+            return saveDocumentAs();
             } else {
-                return;
-            }
+            return performSave(currentFile);
+        }
         }
 
+    /** Saves the document to a new file chosen by the user. Returns true if successful. */
+    private boolean saveDocumentAs() {
+        JFileChooser fileChooser = new JFileChooser(getDefaultDirectory());
+        fileChooser.setDialogTitle("Save HTML Document As");
+        fileChooser.setFileFilter(new javax.swing.filechooser.FileNameExtensionFilter("HTML Documents (*.html)", "html"));
         if (currentFile != null) {
+             fileChooser.setSelectedFile(currentFile);
+        } else {
+             fileChooser.setSelectedFile(new File("untitled.html"));
+        }
+
+        int result = fileChooser.showSaveDialog(this);
+        if (result == JFileChooser.APPROVE_OPTION) {
+            File selectedFile = fileChooser.getSelectedFile();
+            if (!selectedFile.getName().toLowerCase().endsWith(".html")) {
+                selectedFile = new File(selectedFile.getAbsolutePath() + ".html");
+            }
+
+            // Check for overwrite
+            if (selectedFile.exists()) {
+                 int overwriteResult = JOptionPane.showConfirmDialog(this, 
+                         "File \"" + selectedFile.getName() + "\" already exists. Overwrite?",
+                         "Confirm Overwrite",
+                         JOptionPane.YES_NO_OPTION,
+                         JOptionPane.WARNING_MESSAGE);
+                 if (overwriteResult != JOptionPane.YES_OPTION) {
+                     System.out.println("Save As cancelled (overwrite denied).");
+                     return false; // User chose not to overwrite
+                 }
+             }
+
+            currentFile = selectedFile;
+            updateTitle();
+            boolean saved = performSave(currentFile); 
+            if (saved) {
+                preferencesManager.addRecentFile(currentFile.getAbsolutePath());
+                updateRecentFilesMenu();
+            }
+            return saved;
+        } else {
+            System.out.println("Save As cancelled by user.");
+            return false; // User cancelled Save As
+        }
+    }
+
+    /** Updates the window title based on current file and dirty state. */
+    private void updateTitle() {
+        String baseTitle = "Syngrafi";
+        String fileName = (currentFile != null) ? currentFile.getName() : "Untitled";
+        String dirtyMarker = (textEditor != null && textEditor.isDirty()) ? "*" : "";
+        setTitle(baseTitle + " - " + fileName + dirtyMarker);
+    }
+
+    /** Performs the actual write to the specified file. Returns true if successful. */
+    private boolean performSave(File file) {
+        try {
             String textToSave = textEditor.getText();
             lastEditTimestamp = System.currentTimeMillis();
-
-            int aiCount = textEditor.getAICharCount();
-            int humanCount = textEditor.getHumanCharCount();
-            SimpleDateFormat sdf = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z");
-            String createdDate = sdf.format(new Date(creationTimestamp));
-            String updatedDate = sdf.format(new Date(lastEditTimestamp));
-
+            // ... (Generate metadata)
             String metadata = String.format("<!-- " +
                     "AI_CHARS=%d HUMAN_CHARS=%d " +
                     "CREATED_TIMESTAMP=%d LAST_EDIT_TIMESTAMP=%d " +
-                    "CREATED_DATE=\"%s\" LAST_UPDATED_DATE=\"%s\" " +
                     "VERSION=%s -->",
-                    aiCount, humanCount,
-                    creationTimestamp, lastEditTimestamp,
-                    createdDate, updatedDate,
-                    VERSION);
+                    textEditor.getAICharCount(), textEditor.getHumanCharCount(),
+                    creationTimestamp, lastEditTimestamp, VERSION);
 
-            textToSave += "\n" + metadata + "\n";
+            textToSave += "\n" + metadata + "\n"; // Append metadata
 
-            try (BufferedWriter writer = new BufferedWriter(new FileWriter(currentFile))) {
-                writer.write(textToSave);
-                // Update status bar using TextEditor's method AFTER saving and marking clean
-                textEditor.markClean(); 
-                textEditor.updateStatusBarInfo(); 
-                preferencesManager.addRecentFile(currentFile.getAbsolutePath());
-                updateRecentFilesMenu();
-            } catch (IOException ex) {
-                ex.printStackTrace();
-                statusBar.setText("Error saving file.");
+            // Ensure parent directory exists (robustness)
+            File parentDir = file.getParentFile();
+            if (parentDir != null && !parentDir.exists()) {
+                if (!parentDir.mkdirs()) {
+                    throw new IOException("Could not create parent directory: " + parentDir);
+                }
             }
+
+            try (BufferedWriter writer = new BufferedWriter(new FileWriter(file))) {
+                 writer.write(textToSave);
+                 textEditor.markClean(); 
+                 textEditor.updateStatusBarInfo();
+                 System.out.println("File saved successfully: " + file.getName()); // Debug
+                 return true;
+            }
+        } catch (IOException ex) {
+            ex.printStackTrace();
+            statusBar.setText("Error saving file: " + ex.getMessage());
+            JOptionPane.showMessageDialog(this, "Error saving file: "+ ex.getMessage(), "Save Error", JOptionPane.ERROR_MESSAGE);
+            return false;
         }
     }
 
@@ -688,58 +766,100 @@ public class Syngrafi extends JFrame {
         helpDialog.setVisible(true);
     }
 
+    /**
+     * Applies settings changes, like enabling/disabling AI features in the UI.
+     * Called after settings are saved in SettingsDialog.
+     */
+    public void applySettings() {
+        boolean aiDisabled = preferencesManager.isAiFeaturesDisabled();
+        
+        // Enable/disable menu items
+        if (rewriteMenuItem != null) {
+            rewriteMenuItem.setEnabled(!aiDisabled);
+        }
+        // Add similar logic for autocomplete menu items if they exist
+
+        // Enable/disable toolbar buttons
+        if (rewriteToolbarButton != null) {
+            rewriteToolbarButton.setEnabled(!aiDisabled);
+        }
+         // Add similar logic for autocomplete toolbar buttons if they exist
+
+        // Optionally update status bar or other indicators
+        if (aiDisabled) {
+            statusBar.setText("AI Features Disabled");
+            // Ensure API provider is effectively nulled out in TextEditor
+            if (textEditor != null) {
+                 textEditor.setAPIProvider(null);
+            }
+        } else {
+            // Re-apply API provider if features are re-enabled
+            updateAPIProvider(
+                preferencesManager.getApiKey("apiKeyOpenAI"), 
+                preferencesManager.getApiKey("apiKeyGemini"), 
+                preferencesManager.getPreference("provider", "OpenAI"), 
+                preferencesManager.getPreference("model", preferencesManager.getPreference("provider", "OpenAI").equals("OpenAI") ? "gpt-4o" : "gemini-1.5-flash")
+            );
+        }
+        
+        // Force re-layout/repaint if needed, though usually handled by Swing
+        // this.revalidate();
+        // this.repaint();
+    }
+
     // --- Rewrite Selection --- //
     private void triggerRewriteSelection() {
+        if (preferencesManager.isAiFeaturesDisabled()) {
+             statusBar.setText("AI features are currently disabled in settings.");
+             return;
+        }
+        
         String selectedText = textEditor.getSelectedText();
         if (selectedText == null || selectedText.trim().isEmpty()) {
-            statusBar.setText("Please select text to rewrite.");
-            return;
+             statusBar.setText("Please select text to rewrite.");
+             return;
         }
 
         if (rewriteManager == null || currentProvider == null || !preferencesManager.hasApiKey()) {
-            JOptionPane.showMessageDialog(this,
-                    "Rewrite functionality requires a configured API Provider and Key.",
-                    "Rewrite Error", JOptionPane.ERROR_MESSAGE);
-            return;
+             JOptionPane.showMessageDialog(this,
+                     "Rewrite functionality requires a configured API Provider and Key.",
+                     "Rewrite Error", JOptionPane.ERROR_MESSAGE);
+             return;
         }
 
-        // --- Custom Dialog for Multi-line Prompt Input ---
+        // Show custom dialog for prompt
         JPanel panel = new JPanel(new BorderLayout(5, 5));
         panel.add(new JLabel("Enter rewrite instructions (or leave blank for default):", SwingConstants.LEFT), BorderLayout.NORTH);
-
-        JTextArea promptTextArea = new JTextArea(5, 40); // Multi-line text area
+        JTextArea promptTextArea = new JTextArea(5, 40); 
         promptTextArea.setLineWrap(true);
         promptTextArea.setWrapStyleWord(true);
-        // Optionally pre-fill with default if desired, but often better empty
-        // promptTextArea.setText(preferencesManager.getDefaultRewritePrompt()); 
         JScrollPane scrollPane = new JScrollPane(promptTextArea);
         panel.add(scrollPane, BorderLayout.CENTER);
-
         int option = JOptionPane.showConfirmDialog(this, panel, "Rewrite Selection", 
                                                JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
-
         if (option != JOptionPane.OK_OPTION) {
             return; // User cancelled
         }
+        String userProvidedPrompt = promptTextArea.getText(); 
 
-        String userProvidedPrompt = promptTextArea.getText(); // Get text from JTextArea
-        // --- End Custom Dialog ---
-
-        statusBar.setText("Rewriting selection...");
+        statusBar.setText("Generating rewrite suggestions..."); // Update status
         setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
 
-        // Use RewriteManager to perform the rewrite
+        // Call RewriteManager to get multiple suggestions
         rewriteManager.performRewrite(selectedText, userProvidedPrompt)
-            .thenAcceptAsync(rewrittenText -> {
+            .thenAcceptAsync(suggestions -> {
                 // Update UI on Event Dispatch Thread
-                if (rewrittenText == null || rewrittenText.startsWith("ERROR:")) {
-                    String errorMessage = (rewrittenText == null) ? "API returned null." : rewrittenText.substring(6);
+                if (suggestions == null || suggestions.isEmpty() || (suggestions.size() == 1 && suggestions.get(0).startsWith("ERROR:"))) {
+                    String errorMessage = "API returned no suggestions.";
+                    if (suggestions != null && !suggestions.isEmpty()) {
+                        errorMessage = suggestions.get(0).substring(6); // Extract error message
+                    }
                     JOptionPane.showMessageDialog(this, "Rewrite failed: " + errorMessage, "API Error", JOptionPane.ERROR_MESSAGE);
                     statusBar.setText("Rewrite failed.");
                 } else {
-                    // Call TextEditor method to replace selection
-                    textEditor.replaceSelectionWithRewrite(rewrittenText.trim());
-                    statusBar.setText("Rewrite successful.");
+                    // Show the suggestions in the TextEditor popup
+                    textEditor.showRewritePopup(suggestions);
+                    // Status bar message is now handled by showRewritePopup
                 }
                 setCursor(Cursor.getDefaultCursor());
             }, SwingUtilities::invokeLater); // Ensure UI update happens on EDT
