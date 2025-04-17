@@ -1,4 +1,6 @@
 import api.APIProvider;
+import io.github.geniot.jortho.FileUserDictionary;
+import io.github.geniot.jortho.SpellChecker;
 
 import javax.swing.*;
 import javax.swing.event.*;
@@ -20,6 +22,15 @@ import java.util.concurrent.CompletableFuture;
 import java.awt.event.ActionEvent;
 import java.io.IOException;
 import java.io.StringWriter;
+import javax.swing.text.Highlighter;
+import javax.swing.text.DefaultHighlighter;
+import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
+
+import java.net.URL;
+import java.net.MalformedURLException;
 
 /**
  * A text editor that uses HTMLEditorKit for formatting,
@@ -58,7 +69,7 @@ public class TextEditor extends JTextPane {
 
         // Provide some default style for headings, normal text
         StyleSheet styles = kit.getStyleSheet();
-        styles.addRule("body { font-size: 12pt; font-family: Serif; }");
+        styles.addRule("body { font-size: 12pt; font-family: Georgia; }");
         styles.addRule("ul, ol { margin-left: 20px; padding-left: 20px; }");
         styles.addRule("li { margin-left: 0; text-align: left; }");
         styles.addRule("h1 { font-size: 24pt; }");
@@ -75,6 +86,42 @@ public class TextEditor extends JTextPane {
         setupTypingListener();
         loadNumSuggestions();
         setupPasteAction();
+        initializeJOrtho(); // Initialize JOrtho spellchecker
+    }
+
+    private void initializeJOrtho() {
+        try {
+            // Define the base URL for dictionaries (using classpath)
+            // Assumes a 'dictionaries' folder in resources
+            URL dictionaryUrl = getClass().getClassLoader().getResource("dictionaries/");
+            if (dictionaryUrl == null) {
+                System.err.println("Error: Could not find 'dictionaries' folder in classpath/resources.");
+                 statusBar.setText("Spellcheck dictionary path not found.");
+                return;
+            }
+
+            // Set JOrtho properties (including dictionary path)
+            SpellChecker.setUserDictionaryProvider(new FileUserDictionary());
+            // Register the English dictionary (adjust file name if needed)
+             // JOrtho might automatically find .ortho or .dic/.aff files
+             SpellChecker.registerDictionaries(null, "en"); 
+             // Or specify exact file: SpellChecker.registerDictionary(dictionaryUrl.toString(), "dictionary_en.ortho");
+
+            // Register this text component with the SpellChecker
+            SpellChecker.register(this);
+
+            // Optional: Enable the right-click suggestions menu
+            // SpellChecker.enableChecker(this, true); // Might conflict with other popups, enable if needed
+
+            System.out.println("JOrtho initialized.");
+             statusBar.setText("Spellchecker initialized.");
+
+        } catch (Exception e) {
+            System.err.println("Error initializing JOrtho: " + e.getMessage());
+            e.printStackTrace();
+            statusBar.setText("Spellcheck initialization failed.");
+            // JOrtho might be disabled if setup fails
+        }
     }
 
     // Undo helper method
@@ -104,9 +151,9 @@ public class TextEditor extends JTextPane {
      */
     @Override
     protected void processKeyEvent(KeyEvent e) {
-        HTMLDocument doc = (HTMLDocument) getDocument();
+                        HTMLDocument doc = (HTMLDocument) getDocument();
         HTMLEditorKit kit = (HTMLEditorKit) getEditorKit();
-        int caretPos = getCaretPosition();
+                        int caretPos = getCaretPosition();
 
         if (e.getID() == KeyEvent.KEY_PRESSED) {
             // --- Enter Key Handling ---
@@ -133,11 +180,11 @@ public class TextEditor extends JTextPane {
                 } else {
                     // ENTER pressed outside a list item
                     // Check if we are exiting a heading
-                    if (activeHeadingLevel != 0) {
-                         SwingUtilities.invokeLater(this::revertHeadingMode);
+                if (activeHeadingLevel != 0) {
+                    SwingUtilities.invokeLater(this::revertHeadingMode);
                          // Default action (insert paragraph) will execute after revert
-                    } else if (isCaretInHeading()) {
-                         SwingUtilities.invokeLater(this::setNormalText);
+                } else if (isCaretInHeading()) {
+                    SwingUtilities.invokeLater(this::setNormalText);
                          // Default action will execute after setting normal
                     }
                     // Allow default Enter action (creates new <p>) if not in list or heading
@@ -414,7 +461,7 @@ public class TextEditor extends JTextPane {
          if (isAnyDialogVisible()) return; // Don't trigger if a dialog is open
          if (isAutocompleteActive || currentProvider == null || getDocument().getLength() == 0) {
             return;
-         }
+        }
 
         int n = 3;
         try {
@@ -451,21 +498,71 @@ public class TextEditor extends JTextPane {
 
         int finalN = n;
         CompletableFuture.allOf(futures).thenRun(() -> {
+            boolean errorOccurred = false;
+            String errorMessage = "Ready"; // Default status
             try {
                 for (int i = 0; i < finalN; i++) {
-                    String raw = futures[i].get().trim();
-                    raw = cleanOverlap(getPlainText(), raw);
-                    raw = cleanupSuggestion(getPlainText(), raw);
-                    currentSuggestions[i] = raw;
+                    try {
+                        String raw = futures[i].get().trim(); // Get result for each future
+                         // Check for common API error messages (example for Gemini quota)
+                         if (raw.contains("exceeded your current quota")) {
+                             System.err.println("API Error detected: " + raw);
+                             errorMessage = "Autocomplete failed: API Quota Exceeded";
+                             errorOccurred = true;
+                             currentSuggestions[i] = null; // Clear potential error message suggestion
+                             continue; // Skip processing this suggestion
+                         }
+                         // Add checks for other known error patterns if necessary
+
+                         raw = cleanOverlap(getPlainText(), raw);
+                         raw = cleanupSuggestion(getPlainText(), raw);
+                         currentSuggestions[i] = raw;
+                    } catch (Exception futureEx) {
+                        // Handle exception fetching individual future result
+                        System.err.println("Error fetching suggestion future: " + futureEx.getMessage());
+                        futureEx.printStackTrace();
+                        errorMessage = "Autocomplete failed: Error fetching suggestion";
+                        errorOccurred = true;
+                        currentSuggestions[i] = null;
+                    }
                 }
             } catch (Exception ex) {
-                ex.printStackTrace();
+                 // Handle general exceptions during the completion phase
+                 System.err.println("Error processing suggestions: " + ex.getMessage());
+                 ex.printStackTrace();
+                 errorMessage = "Autocomplete failed: Processing Error";
+                 errorOccurred = true;
             }
+
+            String finalErrorMessage = errorMessage; // Effectively final for lambda
+            boolean finalErrorOccurred = errorOccurred; // Effectively final
+
             SwingUtilities.invokeLater(() -> {
-                showAutoCompletePopup(currentSuggestions);
+                if (!finalErrorOccurred) {
+                    // Only show popup if no errors occurred and we have valid suggestions
+                    boolean hasValidSuggestions = false;
+                    for(String s : currentSuggestions) {
+                        if (s != null && !s.trim().isEmpty()) {
+                            hasValidSuggestions = true;
+                            break;
+                        }
+                    }
+                    if (hasValidSuggestions) {
+                        showAutoCompletePopup(currentSuggestions);
+                    }
+                }
                 isAutocompleteActive = false;
-                statusBar.setText("Ready");
+                statusBar.setText(finalErrorMessage);
             });
+        }).exceptionally(ex -> { // Catch exceptions from CompletableFuture.allOf itself
+            System.err.println("Error waiting for autocomplete futures: " + ex.getMessage());
+            ex.printStackTrace();
+            SwingUtilities.invokeLater(() -> {
+                statusBar.setText("Autocomplete failed: Network/API Error");
+                isAutocompleteActive = false;
+                cancelAutoComplete(); // Ensure popup is hidden etc.
+            });
+            return null;
         });
     }
 
@@ -671,7 +768,7 @@ public class TextEditor extends JTextPane {
     private void revertHeadingMode() {
         activeHeadingLevel = 0;
         MutableAttributeSet attrs = new SimpleAttributeSet();
-        StyleConstants.setFontFamily(attrs, "Serif");
+        StyleConstants.setFontFamily(attrs, "Georgia");
         StyleConstants.setFontSize(attrs, 12);
         setCharacterAttributes(attrs, true);
         statusBar.setText("Normal text mode enabled.");
@@ -705,7 +802,7 @@ public class TextEditor extends JTextPane {
 
                 // Insert as plain text with default attributes
                 SimpleAttributeSet attrs = new SimpleAttributeSet();
-                StyleConstants.setFontFamily(attrs, "Serif");
+                StyleConstants.setFontFamily(attrs, "Georgia");
                 StyleConstants.setFontSize(attrs, 12);
                 ((HTMLEditorKit) getEditorKit()).insertHTML(doc, start, escapeHTML(replaced), 0, 0, null);
 
@@ -831,9 +928,9 @@ public class TextEditor extends JTextPane {
     /** Generic method to apply/toggle lists based on selection, using manual HTML manipulation */
     private void applyList(HTML.Tag listTag) {
         HTMLEditorKit kit = (HTMLEditorKit) getEditorKit();
-        HTMLDocument doc = (HTMLDocument) getDocument();
-        int start = getSelectionStart();
-        int end = getSelectionEnd();
+            HTMLDocument doc = (HTMLDocument) getDocument();
+            int start = getSelectionStart();
+            int end = getSelectionEnd();
         int initialCaretPos = getCaretPosition();
 
         // Determine the range of paragraphs affected by the selection
@@ -853,7 +950,7 @@ public class TextEditor extends JTextPane {
                 convertParagraphsToListItems(doc, kit, startPara, endPara, listTag);
                 statusBar.setText("Applied list formatting.");
             }
-            isDirty = true;
+                isDirty = true;
             // Caret positioning might need adjustment after major structure changes
             // Placing it at the start of the modified section is a safe default
             // More sophisticated positioning could be added later if needed.
@@ -889,88 +986,184 @@ public class TextEditor extends JTextPane {
         return commonListParent != null; // True if all were LIs in the same listTag parent
     }
 
-    /** Converts LI elements within the range back to P elements */
-    private void convertListItemsToParagraphs(HTMLDocument doc, HTMLEditorKit kit, Element startPara, Element endPara, HTML.Tag listTag)
-            throws BadLocationException, IOException {
-
-        Element listElement = findParentElement(startPara, listTag);
-        if (listElement == null) return; // Should not happen if checkSelectionIsListType passed
-
-        int listStartOffset = listElement.getStartOffset();
-        int listEndOffset = listElement.getEndOffset();
-
-        // Collect HTML content of LIs within the selection range
-        StringBuilder extractedContent = new StringBuilder();
-        java.util.List<Element> elementsToRemove = new java.util.ArrayList<>();
-        Element currentPara = startPara;
-        int rangeStart = -1, rangeEnd = -1;
-
-        while (currentPara != null && currentPara.getStartOffset() <= endPara.getStartOffset()) {
-             Element li = findParentElement(currentPara, HTML.Tag.LI);
-             if (li != null && findParentElement(li, listTag) == listElement) {
-                 if (rangeStart == -1) rangeStart = li.getStartOffset();
-                 rangeEnd = li.getEndOffset();
-                 // Extract inner HTML of the <li> to preserve formatting
-                 String liInnerHtml = getElementHtml(doc, li, false); // Get content only
-                 extractedContent.append("<p>").append(liInnerHtml).append("</p>");
-                 elementsToRemove.add(li);
-             }
-            if (currentPara.getEndOffset() >= doc.getLength() || currentPara == endPara) break;
-             currentPara = doc.getParagraphElement(currentPara.getEndOffset());
-        }
-
-        if (rangeStart != -1 && rangeEnd != -1) {
-            // Remove the original list items (or potentially the whole list if selection covers all)
-            // Removing individual LIs can be tricky. Replace the whole list section if possible.
-            // A simpler approach for now: Remove the entire list element and re-insert.
-            // This might lose surrounding context if the list wasn't the only thing.
-            // TODO: Refine removal to be more targeted if needed.
-
-            // Get HTML before and after the list
-            String htmlBefore = doc.getText(0, listStartOffset);
-            String htmlAfter = doc.getText(listEndOffset, doc.getLength() - listEndOffset);
-
-             // Replace the document content: HTML before + extracted paragraphs + HTML after
-            // This is a heavy-handed approach, consider kit.insertHTML if possible
-            doc.remove(0, doc.getLength()); // Clear document
-            // Need to re-apply body tags etc.
-             setText(""); // Clear and re-initialize basic structure
-             kit.insertHTML(doc, 0, htmlBefore + extractedContent.toString() + htmlAfter, 0, 0, null);
-
-             // Alternative using insertHTML (potentially safer but might have issues at boundaries)
-            // doc.remove(rangeStart, rangeEnd - rangeStart);
-            // kit.insertHTML(doc, rangeStart, extractedContent.toString(), 0, 0, null);
-        }
-    }
-
     /** Converts P elements within the range into LI elements of the specified listTag */
     private void convertParagraphsToListItems(HTMLDocument doc, HTMLEditorKit kit, Element startPara, Element endPara, HTML.Tag listTag)
             throws BadLocationException, IOException {
 
-        StringBuilder listContent = new StringBuilder();
-        int rangeStart = startPara.getStartOffset();
-        int rangeEnd = endPara.getEndOffset();
+        // Iterate backwards to avoid offset issues during removal
+        java.util.List<String> paragraphContents = new java.util.ArrayList<>();
+        Element currentPara = endPara;
+        int lastParaEndOffset = -1;
+        // Correctly determine the start boundary for the loop
+        int firstParaStartOffset = startPara.getStartOffset(); 
 
-        // Iterate through paragraphs in the range
-        Element currentPara = startPara;
-        while (currentPara != null && currentPara.getStartOffset() < rangeEnd) {
-            // Extract inner HTML of the paragraph to preserve formatting
+        while (currentPara != null && currentPara.getStartOffset() >= firstParaStartOffset) {
+            int paraStart = currentPara.getStartOffset();
+            int paraEnd = currentPara.getEndOffset();
+            
+            // Ensure we don't process elements outside the initial start paragraph boundary
+            if (paraStart < firstParaStartOffset) break; 
+
+            // Store end offset of the last paragraph correctly if needed later (though insertion uses firstParaStartOffset)
+            if (lastParaEndOffset == -1) lastParaEndOffset = paraEnd; 
+
             String pInnerHtml = getElementHtml(doc, currentPara, false); // Get content only
-            listContent.append("<li>").append(pInnerHtml).append("</li>");
+            paragraphContents.add(0, pInnerHtml); // Add to beginning to maintain order
 
-            if (currentPara.getEndOffset() >= doc.getLength() || currentPara == endPara) break;
-            Element nextPara = doc.getParagraphElement(currentPara.getEndOffset());
-             // Check for infinite loop or unexpected structure
-             if (nextPara == null || nextPara.getStartOffset() <= currentPara.getStartOffset()) break;
-             currentPara = nextPara;
+            // Find the previous paragraph *before* removing the current one
+            Element prevPara = null;
+            if (paraStart > 0) {
+                try {
+                    // Find the element physically before the current paragraph's start
+                    // getParagraphElement might include the current element if start is not exactly paraStart-1
+                    Element checkPrev = doc.getCharacterElement(paraStart - 1);
+                    if (checkPrev != null) {
+                        prevPara = doc.getParagraphElement(checkPrev.getStartOffset());
+                    } 
+                    // Fallback if character element is null or doesn't yield paragraph
+                    if (prevPara == null || prevPara == currentPara) {
+                         prevPara = doc.getParagraphElement(paraStart - 1);
+                    }
+                } catch (Exception ignore) {
+                    // Ignore if we can't find the element before (e.g., at doc start)
+                }
+            }
+            
+            // Boundary condition check: ensure prevPara is actually before currentPara
+            if (prevPara != null && prevPara.getStartOffset() >= paraStart) { 
+                System.err.println("Warning: Detected potential loop issue finding previous paragraph. Breaking conversion.");
+                prevPara = null; // Prevent potential infinite loop
+            }
+
+            // Remove the current paragraph element
+            // Ensure removal length is positive
+            if (paraEnd > paraStart) {
+                 doc.remove(paraStart, paraEnd - paraStart);
+            } else {
+                 System.err.println("Warning: Skipping removal of zero-length paragraph element at offset " + paraStart);
+            }
+
+            // Move to the previous paragraph element
+            currentPara = prevPara;
+            
+            // Safety break if we somehow get stuck
+            if (currentPara != null && currentPara.getStartOffset() >= paraStart) { 
+                System.err.println("Warning: Previous paragraph offset not decreasing. Breaking conversion.");
+                break;
+            } 
         }
 
-        // Wrap the generated LIs in the appropriate list tag
+        // Build the list HTML from the extracted contents
+        StringBuilder listContent = new StringBuilder();
+        for (String content : paragraphContents) {
+            // Ensure list items aren't completely empty strings if innerHTML was empty
+            listContent.append("<li>").append(content.isEmpty() ? " " : content).append("</li>"); 
+        }
         String listHtml = "<" + listTag.toString() + ">" + listContent.toString() + "</" + listTag.toString() + ">";
 
-        // Remove the original paragraphs and insert the new list
-        doc.remove(rangeStart, rangeEnd - rangeStart);
-        kit.insertHTML(doc, rangeStart, listHtml, 0, 0, listTag); // Insert the whole list
+        // Insert the new list where the paragraphs were (at the original start offset)
+        kit.insertHTML(doc, firstParaStartOffset, listHtml, 0, 0, listTag);
+    }
+
+    /** Converts LI elements within the range back to P elements */
+    private void convertListItemsToParagraphs(HTMLDocument doc, HTMLEditorKit kit, Element startLiPara, Element endLiPara, HTML.Tag listTag)
+            throws BadLocationException, IOException {
+
+        Element listElement = findParentElement(startLiPara, listTag);
+        if (listElement == null) return; // Should not happen
+
+        // Determine the actual start and end LI elements based on the paragraph elements within them
+        Element startLi = findParentElement(startLiPara, HTML.Tag.LI);
+        Element endLi = findParentElement(endLiPara, HTML.Tag.LI);
+
+        // Check if start/end LIs are valid and within the same list
+        if (startLi == null || endLi == null || findParentElement(startLi, listTag) != listElement || findParentElement(endLi, listTag) != listElement) {
+             System.err.println("Error: Selection for list removal is invalid or spans multiple lists.");
+             return;
+        }
+        int firstLiStartOffset = startLi.getStartOffset();
+        int lastLiEndOffset = endLi.getEndOffset(); // End offset of the last LI tag in selection
+
+        // Iterate backwards through LI elements in the selection range
+        java.util.List<String> listItemContents = new java.util.ArrayList<>();
+        Element currentLi = endLi;
+        
+        while (currentLi != null && currentLi.getStartOffset() >= firstLiStartOffset) {
+            // Verify currentLi is indeed within the target listElement
+            if (findParentElement(currentLi, listTag) != listElement) break; 
+
+            int liStart = currentLi.getStartOffset();
+            int liEnd = currentLi.getEndOffset();
+
+            String liInnerHtml = getElementHtml(doc, currentLi, false); // Get content only
+            listItemContents.add(0, "<p>" + liInnerHtml + "</p>"); // Add to beginning as paragraph
+
+             // Find the element preceding the current <li>
+             Element prevLi = null;
+            if (liStart > listElement.getStartOffset()) { // Check we are not the first LI
+                 try {
+                      // Get the element structure right before the current LI start
+                      Element checkPrev = doc.getCharacterElement(liStart - 1); 
+                      if (checkPrev != null) {
+                           prevLi = findParentElement(checkPrev, HTML.Tag.LI);
+                           // If the element before LI isn't part of another LI, set prevLi to null
+                           if (prevLi != null && findParentElement(prevLi, listTag) != listElement) {
+                                prevLi = null;
+                           }
+                      }
+                 } catch (Exception ignore) {}
+             }
+
+            // Remove the current list item element
+             if (liEnd > liStart) { // Ensure positive length
+                doc.remove(liStart, liEnd - liStart);
+             } else {
+                 System.err.println("Warning: Skipping removal of zero-length LI element at offset " + liStart);
+             }
+
+            // --- Move to the previous LI element --- 
+             currentLi = prevLi;
+             
+             // Safety break
+             if (currentLi != null && currentLi.getStartOffset() >= liStart) {
+                 System.err.println("Warning: Previous LI offset not decreasing. Breaking conversion.");
+                 break;
+             }
+        }
+
+        // --- Insert replacement paragraphs and potentially remove list tags ---
+        int insertionPoint = listElement.getStartOffset(); // Default to list start
+
+        // Need to re-check the list element state *after* removals
+        // This is unreliable because the original listElement reference might be stale.
+        // A pragmatic approach: check if the content between original list start/end is now empty or just whitespace HTML.
+        boolean listIsEmptyNow = false;
+        try {
+            String remainingListContent = doc.getText(listElement.getStartOffset(), listElement.getEndOffset() - listElement.getStartOffset());
+            // Check if it only contains list tags and maybe whitespace/empty LIs which might remain after partial removal
+            String simplifiedContent = remainingListContent.replaceAll("<\\/?(ol|ul|li)[^>]*>", "").trim();
+            listIsEmptyNow = simplifiedContent.isEmpty();
+            
+            if (listIsEmptyNow) {
+                insertionPoint = listElement.getStartOffset();
+                doc.remove(listElement.getStartOffset(), listElement.getEndOffset() - listElement.getStartOffset());
+            }
+        } catch (BadLocationException ble) {
+            System.err.println("Error checking/removing list element after LI removal: " + ble.getMessage());
+            // Proceed with insertion at original start offset as fallback
+            insertionPoint = firstLiStartOffset; 
+        }
+
+        // Build the replacement paragraphs HTML
+        StringBuilder replacementHtml = new StringBuilder();
+        for (String content : listItemContents) {
+            replacementHtml.append(content);
+        }
+
+        // Insert the replacement paragraphs
+        if (replacementHtml.length() > 0) {
+             kit.insertHTML(doc, insertionPoint, replacementHtml.toString(), 0, 0, null);
+        }
     }
 
     /** Helper to get the HTML content of an element */
@@ -1089,7 +1282,7 @@ public class TextEditor extends JTextPane {
         // Basic escaping for inserting plain text into HTML context if needed elsewhere
         // Correctly escape quotes within the Java string literals
         return str.replace("&", "&amp;")
-                  .replace("<", "&lt;")
+                .replace("<", "&lt;")
                   .replace(">", "&gt;")
                   .replace("\"", "&quot;") // Use \" to represent the double quote character
                   .replace("'", "&#39;");
@@ -1204,5 +1397,5 @@ public class TextEditor extends JTextPane {
               }
          }
          return false;
-     }
+    }
 }

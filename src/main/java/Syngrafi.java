@@ -57,6 +57,10 @@ public class Syngrafi extends JFrame {
             @Override
             public void windowClosing(WindowEvent e) {
                 if (checkUnsavedChanges()) {
+                    // Shutdown background tasks before exiting
+                    // if (textEditor != null) {
+                    //     textEditor.shutdownSpellCheckExecutor();
+                    // }
                     dispose();
                     System.exit(0);
                 }
@@ -253,7 +257,10 @@ public class Syngrafi extends JFrame {
 
     private void createEditorPanel() {
         textEditor = new TextEditor(statusBar, preferencesManager);
-        textEditor.setFont(new Font("Serif", Font.PLAIN, 12));
+        textEditor.setFont(new Font("Georgia", Font.PLAIN, 12));
+
+        // Initialize spellchecker *after* editor is created and basic setup done
+        // textEditor.initSpellchecker(); // Removed LanguageTool call
 
         InputMap im = textEditor.getInputMap(JComponent.WHEN_FOCUSED);
         ActionMap am = textEditor.getActionMap();
