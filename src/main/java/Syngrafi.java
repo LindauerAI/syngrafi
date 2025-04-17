@@ -18,6 +18,9 @@ import com.formdev.flatlaf.FlatDarkLaf;
 import com.formdev.flatlaf.FlatLightLaf;
 import com.formdev.flatlaf.util.SystemInfo;
 import java.awt.Toolkit;
+import javax.swing.text.DefaultEditorKit;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
 
 public class Syngrafi extends JFrame {
     private static final String VERSION = "1.0";
@@ -30,6 +33,10 @@ public class Syngrafi extends JFrame {
     private long lastEditTimestamp = 0;
 
     private JMenu recentFilesMenu;
+    private SidebarPanel sidebarPanel;
+
+    private FindReplaceDialog findReplaceDialogInstance = null;
+    private RewriteManager rewriteManager;
 
     public Syngrafi() {
         super("Syngrafi");
@@ -58,9 +65,9 @@ public class Syngrafi extends JFrame {
             public void windowClosing(WindowEvent e) {
                 if (checkUnsavedChanges()) {
                     // Shutdown background tasks before exiting
-                    // if (textEditor != null) {
-                    //     textEditor.shutdownSpellCheckExecutor();
-                    // }
+                    if (sidebarPanel != null) {
+                        sidebarPanel.stopUpdateTimer();
+                    }
                     dispose();
                     System.exit(0);
                 }
@@ -72,7 +79,7 @@ public class Syngrafi extends JFrame {
         statusBar.setBorder(BorderFactory.createEmptyBorder(5, 10, 5, 10));
         add(statusBar, BorderLayout.SOUTH);
 
-        SidebarPanel sidebarPanel = new SidebarPanel(this);
+        sidebarPanel = new SidebarPanel(this);
         sidebarPanel.setPreferredSize(new Dimension(250, 600));
         add(sidebarPanel, BorderLayout.WEST);
 
@@ -119,6 +126,56 @@ public class Syngrafi extends JFrame {
         fileMenu.add(settingsItem);
 
         menuBar.add(fileMenu);
+
+        // --- Edit Menu --- 
+        JMenu editMenu = new JMenu("Edit");
+        
+        JMenuItem undoItem = new JMenuItem("Undo");
+        undoItem.setAccelerator(KeyStroke.getKeyStroke("control Z"));
+        undoItem.addActionListener(e -> textEditor.undo());
+        editMenu.add(undoItem);
+
+        JMenuItem redoItem = new JMenuItem("Redo");
+        redoItem.setAccelerator(KeyStroke.getKeyStroke("control Y")); 
+        redoItem.addActionListener(e -> textEditor.redo());
+        editMenu.add(redoItem);
+
+        editMenu.addSeparator();
+
+        JMenuItem cutItem = new JMenuItem(new DefaultEditorKit.CutAction());
+        cutItem.setText("Cut");
+        cutItem.setAccelerator(KeyStroke.getKeyStroke("control X"));
+        editMenu.add(cutItem);
+
+        JMenuItem copyItem = new JMenuItem(new DefaultEditorKit.CopyAction());
+        copyItem.setText("Copy");
+        copyItem.setAccelerator(KeyStroke.getKeyStroke("control C"));
+        editMenu.add(copyItem);
+
+        JMenuItem pasteItem = new JMenuItem(new DefaultEditorKit.PasteAction());
+        pasteItem.setText("Paste");
+        pasteItem.setAccelerator(KeyStroke.getKeyStroke("control V"));
+        editMenu.add(pasteItem);
+
+        JMenuItem pasteMatchItem = new JMenuItem("Paste and Match Style");
+        pasteMatchItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_V, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx() | InputEvent.SHIFT_DOWN_MASK));
+        pasteMatchItem.addActionListener(e -> textEditor.pasteAndMatchStyle());
+        editMenu.add(pasteMatchItem);
+        
+        editMenu.addSeparator();
+
+        JMenuItem findReplaceItem = new JMenuItem("Find/Replace...");
+        findReplaceItem.setAccelerator(KeyStroke.getKeyStroke("control F"));
+        findReplaceItem.addActionListener(e -> showFindReplaceDialog());
+        editMenu.add(findReplaceItem);
+
+        JMenuItem rewriteItem = new JMenuItem("Rewrite Selection...");
+        rewriteItem.setAccelerator(KeyStroke.getKeyStroke(KeyEvent.VK_R, Toolkit.getDefaultToolkit().getMenuShortcutKeyMaskEx()));
+        rewriteItem.addActionListener(e -> triggerRewriteSelection());
+        editMenu.add(rewriteItem);
+
+        menuBar.add(editMenu); 
+        // --- End Edit Menu ---
 
         JMenu helpMenu = new JMenu("Help");
         JMenuItem aboutItem = new JMenuItem("About Syngrafi");
@@ -179,13 +236,6 @@ public class Syngrafi extends JFrame {
         strikeButton.setMargin(buttonMargin);
         toolBar.add(strikeButton);
 
-        // Add Clear Formatting Button
-        JButton clearFormattingButton = new JButton("Clear Format");
-        clearFormattingButton.setToolTipText("Remove all formatting from selection");
-        clearFormattingButton.addActionListener(e -> textEditor.clearFormatting());
-        clearFormattingButton.setMargin(buttonMargin);
-        toolBar.add(clearFormattingButton);
-
         toolBar.addSeparator();
 
         JButton h1Button = new JButton("H1");
@@ -235,7 +285,7 @@ public class Syngrafi extends JFrame {
 
         toolBar.addSeparator();
 
-        JLabel fontLabel = new JLabel("Font: ");
+        JLabel fontLabel = new JLabel(" Font: ");
         toolBar.add(fontLabel);
         String[] basicFonts = new String[] { "Serif", "SansSerif", "Monospaced", "Georgia" };
         JComboBox<String> fontCombo = new JComboBox<>(basicFonts);
@@ -247,15 +297,17 @@ public class Syngrafi extends JFrame {
         toolBar.add(fontCombo);
 
         toolBar.addSeparator();
-        JLabel sizeLabel = new JLabel("Size: ");
+        JLabel sizeLabel = new JLabel(" Size: ");
         toolBar.add(sizeLabel);
-        JComboBox<Integer> sizeCombo = new JComboBox<>(new Integer[]{12,14,16,18,24,36});
+        JComboBox<Integer> sizeCombo = new JComboBox<>(new Integer[]{8,10,12,14,16,18,24,36});
         sizeCombo.setSelectedItem(12);
         sizeCombo.addActionListener(e -> {
             Integer chosenSize = (Integer) sizeCombo.getSelectedItem();
             textEditor.setFontSize(chosenSize);
         });
         toolBar.add(sizeCombo);
+
+        toolBar.add(Box.createHorizontalStrut(550));
 
 
         // Add toolbar to the center of the BorderLayout panel
@@ -367,6 +419,7 @@ public class Syngrafi extends JFrame {
         if (textEditor != null) {
             textEditor.setAPIProvider(currentProvider);
         }
+        rewriteManager = new RewriteManager(currentProvider, preferencesManager);
         statusBar.setText("Provider changed to " + provider + " | Model: " + model);
     }
 
@@ -619,10 +672,77 @@ public class Syngrafi extends JFrame {
         }
     }
 
+    // Method to show Find/Replace dialog
+    public void showFindReplaceDialog() {
+        if (findReplaceDialogInstance == null || !findReplaceDialogInstance.isShowing()) {
+             findReplaceDialogInstance = new FindReplaceDialog(this, textEditor);
+             findReplaceDialogInstance.setVisible(true);
+        } else {
+             findReplaceDialogInstance.toFront(); // Bring existing dialog to front
+        }
+    }
+
     // Method to show the help dialog
     private void showHelpDialog() {
         HelpDialog helpDialog = new HelpDialog(this);
         helpDialog.setVisible(true);
+    }
+
+    // --- Rewrite Selection --- //
+    private void triggerRewriteSelection() {
+        String selectedText = textEditor.getSelectedText();
+        if (selectedText == null || selectedText.trim().isEmpty()) {
+            statusBar.setText("Please select text to rewrite.");
+            return;
+        }
+
+        if (rewriteManager == null || currentProvider == null || !preferencesManager.hasApiKey()) {
+            JOptionPane.showMessageDialog(this,
+                    "Rewrite functionality requires a configured API Provider and Key.",
+                    "Rewrite Error", JOptionPane.ERROR_MESSAGE);
+            return;
+        }
+
+        // --- Custom Dialog for Multi-line Prompt Input ---
+        JPanel panel = new JPanel(new BorderLayout(5, 5));
+        panel.add(new JLabel("Enter rewrite instructions (or leave blank for default):", SwingConstants.LEFT), BorderLayout.NORTH);
+
+        JTextArea promptTextArea = new JTextArea(5, 40); // Multi-line text area
+        promptTextArea.setLineWrap(true);
+        promptTextArea.setWrapStyleWord(true);
+        // Optionally pre-fill with default if desired, but often better empty
+        // promptTextArea.setText(preferencesManager.getDefaultRewritePrompt()); 
+        JScrollPane scrollPane = new JScrollPane(promptTextArea);
+        panel.add(scrollPane, BorderLayout.CENTER);
+
+        int option = JOptionPane.showConfirmDialog(this, panel, "Rewrite Selection", 
+                                               JOptionPane.OK_CANCEL_OPTION, JOptionPane.PLAIN_MESSAGE);
+
+        if (option != JOptionPane.OK_OPTION) {
+            return; // User cancelled
+        }
+
+        String userProvidedPrompt = promptTextArea.getText(); // Get text from JTextArea
+        // --- End Custom Dialog ---
+
+        statusBar.setText("Rewriting selection...");
+        setCursor(Cursor.getPredefinedCursor(Cursor.WAIT_CURSOR));
+
+        // Use RewriteManager to perform the rewrite
+        rewriteManager.performRewrite(selectedText, userProvidedPrompt)
+            .thenAcceptAsync(rewrittenText -> {
+                // Update UI on Event Dispatch Thread
+                if (rewrittenText == null || rewrittenText.startsWith("ERROR:")) {
+                    String errorMessage = (rewrittenText == null) ? "API returned null." : rewrittenText.substring(6);
+                    JOptionPane.showMessageDialog(this, "Rewrite failed: " + errorMessage, "API Error", JOptionPane.ERROR_MESSAGE);
+                    statusBar.setText("Rewrite failed.");
+                } else {
+                    // Call TextEditor method to replace selection
+                    textEditor.replaceSelectionWithRewrite(rewrittenText.trim());
+                    statusBar.setText("Rewrite successful.");
+                }
+                setCursor(Cursor.getDefaultCursor());
+            }, SwingUtilities::invokeLater); // Ensure UI update happens on EDT
     }
 
     public static void main(String[] args) {

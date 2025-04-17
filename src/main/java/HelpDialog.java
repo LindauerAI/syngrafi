@@ -25,6 +25,7 @@ public class HelpDialog extends JDialog {
                 {"Copy", "Ctrl + C"},
                 {"Paste", "Ctrl + V"},
                 {"Paste and Match Style", "Ctrl + Shift + V"},
+                {"Find/Replace", "Ctrl + F"},
                 {"Toggle Bold", "Ctrl + B"},
                 {"Toggle Italic", "Ctrl + I"},
                 {"Toggle Underline", "Ctrl + U"},

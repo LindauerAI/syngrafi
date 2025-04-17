@@ -40,7 +40,7 @@ public class AutocompletePromptManager {
         // Retrieve and insert AI references if provided
         String references = prefs.getAIReferences();
         if (references != null && !references.trim().isEmpty()) {
-            promptBuilder.append("\nConsider these user-provided references if relevant to the context:\n");
+            promptBuilder.append("\nConsider these user-provided references only if relevant to the context:\n");
             // Split by newline and list them
             String[] refLines = references.trim().split("\\r?\\n");
             for (String ref : refLines) {

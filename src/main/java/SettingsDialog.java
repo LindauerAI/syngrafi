@@ -23,12 +23,15 @@ public class SettingsDialog extends JDialog {
     private JTextArea generalStylePromptArea;
     private JTextField maxLengthField;
     private JTextArea aiReferencesArea;
-    private String initialThemeValue; // Store initial theme value
+    private String initialThemeValue;
+
+    // Rewrite Tab components
+    private JTextArea defaultRewritePromptArea;
 
     public SettingsDialog(JFrame parent, PreferencesManager preferencesManager) {
         super(parent, "Settings", true);
         this.preferencesManager = preferencesManager;
-        setSize(600, 400);
+        setSize(600, 450);
         setLocationRelativeTo(parent);
         setLayout(new BorderLayout());
 
@@ -41,42 +44,30 @@ public class SettingsDialog extends JDialog {
         autocompleteScroll = new JScrollPane(autocompletePanel);
         tabbedPane.addTab("Autocomplete", autocompleteScroll);
 
-        // Add AI Settings Tab
         JPanel aiSettingsTab = createAISettingsTab();
         tabbedPane.addTab("AI Settings", aiSettingsTab);
 
+        // Add Rewrite Tab
+        JPanel rewriteTab = createRewriteTab();
+        tabbedPane.addTab("Rewrite", rewriteTab);
+
         add(tabbedPane, BorderLayout.CENTER);
 
-        // --- New bottom panel with Apply + Close ---
+        // --- Bottom panel ---
         JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
         JButton applyButton = new JButton("Apply");
-        applyButton.addActionListener(e -> {
-            // Save but keep dialog open
-            saveSettings(false); // pass false to not dispose
-        });
+        applyButton.addActionListener(e -> saveSettings(false));
         bottomPanel.add(applyButton);
-
-        // Save and close
         JButton saveButton = new JButton("Save");
-        saveButton.addActionListener(e -> {
-            // Save and then close
-            saveSettings(true); // pass true to close after saving
-        });
+        saveButton.addActionListener(e -> saveSettings(true));
         bottomPanel.add(saveButton);
-
         JButton closeButton = new JButton("Close");
-        closeButton.addActionListener(e -> {
-            // Save and then dispose
-            saveSettings(true); // pass true to close after saving
-        });
+        closeButton.addActionListener(e -> dispose());
         bottomPanel.add(closeButton);
-
         add(bottomPanel, BorderLayout.SOUTH);
 
         loadPreferences();
         refreshAutocompletePrompts();
-
-        saveSettings(true);
     }
 
 
@@ -142,20 +133,15 @@ public class SettingsDialog extends JDialog {
     }
 
     private void loadPreferences() {
-        // Use getApiKey for sensitive keys
-        String openAIKey = preferencesManager.getApiKey("apiKeyOpenAI"); 
-        String geminiKey = preferencesManager.getApiKey("apiKeyGemini"); 
-        // Use standard getPreference for others
+        String openAIKey = preferencesManager.getApiKey("apiKeyOpenAI");
+        String geminiKey = preferencesManager.getApiKey("apiKeyGemini");
         String provider = preferencesManager.getPreference("provider", "OpenAI");
         String model = preferencesManager.getPreference("model",
                 provider.equals("OpenAI") ? "gpt-4o" : "gemini-2.0-flash");
         String numSuggestions = preferencesManager.getPreference("numSuggestions", "3");
-        String defaultPath = preferencesManager.getPreference("defaultPath", System.getProperty("user.dir"));
-        String delay = preferencesManager.getPreference("autocompleteDelay", "600");
+        String defaultPath = preferencesManager.getDefaultPath();
+        String delay = preferencesManager.getPreference("autocompleteDelay", "1000");
         String theme = preferencesManager.getPreference("theme", "System");
-        String stylePrompt = preferencesManager.getPreference("generalStylePrompt", "");
-        String maxLength = preferencesManager.getPreference("autocompleteMaxLength", "100");
-        String references = preferencesManager.getAIReferences();
 
         openAIKeyField.setText(openAIKey);
         geminiKeyField.setText(geminiKey);
@@ -166,10 +152,15 @@ public class SettingsDialog extends JDialog {
         defaultPathField.setText(defaultPath);
         autocompleteDelayField.setText(delay);
         themeComboBox.setSelectedItem(theme);
-        generalStylePromptArea.setText(stylePrompt);
-        maxLengthField.setText(maxLength);
-        aiReferencesArea.setText(references);
-        initialThemeValue = theme; // Store the initially loaded theme
+        initialThemeValue = theme;
+
+        // Load AI settings (into fields created in createAISettingsTab)
+        generalStylePromptArea.setText(preferencesManager.getPreference("generalStylePrompt", ""));
+        maxLengthField.setText(preferencesManager.getPreference("autocompleteMaxLength", "200"));
+        aiReferencesArea.setText(preferencesManager.getAIReferences());
+
+        // Load Rewrite setting (into the new text area)
+        defaultRewritePromptArea.setText(preferencesManager.getDefaultRewritePrompt());
     }
 
     /**
@@ -222,61 +213,48 @@ public class SettingsDialog extends JDialog {
     }
 
     private void saveSettings(boolean disposeAfter) {
+        // Save general settings
         String openAIKey = openAIKeyField.getText().trim();
         String geminiKey = geminiKeyField.getText().trim();
-        String provider = (String) providerComboBox.getSelectedItem();
-        String model = (String) modelComboBox.getSelectedItem();
-        String numSuggestionsVal = numSuggestionsField.getText().trim();
-        if (numSuggestionsVal.isEmpty()) {
-            numSuggestionsVal = "3";
-        }
-        int n;
-        try {
-            n = Math.max(1, Math.min(10, Integer.parseInt(numSuggestionsVal)));
-        } catch (NumberFormatException ex) {
-            n = 3;
-        }
-
-        String defaultPath = defaultPathField.getText().trim();
-        if (defaultPath.isEmpty()) {
-            defaultPath = System.getProperty("user.dir");
-        }
-
-        String delayVal = autocompleteDelayField.getText().trim();
-        int delay;
-        try {
-            delay = Integer.parseInt(delayVal);
-            if (delay < 0) delay = 600;
-        } catch (NumberFormatException ex) {
-            delay = 600;
-        }
-
-        String theme = (String) themeComboBox.getSelectedItem();
-
+        // Use setPreference for API keys as it handles routing to secureProperties
         preferencesManager.setPreference("apiKeyOpenAI", openAIKey);
         preferencesManager.setPreference("apiKeyGemini", geminiKey);
+
+        String provider = (String) providerComboBox.getSelectedItem();
+        String model = (String) modelComboBox.getSelectedItem();
         preferencesManager.setPreference("provider", provider);
         preferencesManager.setPreference("model", model);
+
+        String numSuggestionsVal = numSuggestionsField.getText().trim();
+        int n = 3;
+        try { n = Math.max(1, Math.min(10, Integer.parseInt(numSuggestionsVal))); } catch (NumberFormatException ex) { n = 3; }
         preferencesManager.setPreference("numSuggestions", String.valueOf(n));
+
+        String defaultPath = defaultPathField.getText().trim();
+        if (defaultPath.isEmpty()) { defaultPath = System.getProperty("user.dir"); }
+        // Use setPreference for default path
         preferencesManager.setPreference("defaultPath", defaultPath);
+
+        String delayVal = autocompleteDelayField.getText().trim();
+        int delay = 1000;
+        try { delay = Integer.parseInt(delayVal); if (delay < 0) delay = 1000; } catch (NumberFormatException ex) { delay = 1000; }
         preferencesManager.setPreference("autocompleteDelay", String.valueOf(delay));
+
+        String theme = (String) themeComboBox.getSelectedItem();
         preferencesManager.setPreference("theme", theme);
+
+        // Save AI settings
         preferencesManager.setPreference("generalStylePrompt", generalStylePromptArea.getText().trim());
-        preferencesManager.setAIReferences(aiReferencesArea.getText().trim());
-
-        // Validate and save max length
         String maxLengthStr = maxLengthField.getText().trim();
-        int maxLengthVal = 100; // default
-        try {
-            maxLengthVal = Integer.parseInt(maxLengthStr);
-            if (maxLengthVal < 10) maxLengthVal = 10; // Ensure a minimum reasonable length
-            if (maxLengthVal > 1000) maxLengthVal = 1000; // Set a reasonable upper limit
-        } catch (NumberFormatException ex) {
-            // Keep default if input is invalid
-        }
-        preferencesManager.setPreference("autocompleteMaxLength", String.valueOf(maxLengthVal)); // Save max length
+        int maxLengthVal = 200;
+        try { maxLengthVal = Integer.parseInt(maxLengthStr); if (maxLengthVal < 10) maxLengthVal = 10; if (maxLengthVal > 1000) maxLengthVal = 1000; } catch (NumberFormatException ex) { maxLengthVal = 200; }
+        preferencesManager.setPreference("autocompleteMaxLength", String.valueOf(maxLengthVal));
+        preferencesManager.setAIReferences(aiReferencesArea.getText().trim()); // Uses specific setter
 
-        // Save user-defined prompts from the Autocomplete tab
+        // Save Rewrite setting (from the new text area)
+        preferencesManager.setDefaultRewritePrompt(defaultRewritePromptArea.getText().trim());
+
+        // Save autocomplete prompts
         Component[] rows = autocompletePanel.getComponents();
         for (Component comp : rows) {
             if (comp instanceof JPanel) {
@@ -305,13 +283,17 @@ public class SettingsDialog extends JDialog {
                 "Theme changes will take effect after restarting Syngrafi.",
                 "Restart Required",
                 JOptionPane.INFORMATION_MESSAGE);
-            initialThemeValue = newTheme; // Update initial value to prevent re-prompting unless changed again
+            initialThemeValue = newTheme;
         }
-        // --- End Theme Change Check ---
 
-        // Update the main frame's API provider in case keys or model changed
+        // Update the main frame's API provider
         if (getParent() instanceof Syngrafi) {
-            ((Syngrafi) getParent()).updateAPIProvider(openAIKey, geminiKey, provider, model);
+            ((Syngrafi) getParent()).updateAPIProvider(
+                preferencesManager.getApiKey("apiKeyOpenAI"), // Fetch updated keys
+                preferencesManager.getApiKey("apiKeyGemini"),
+                provider,
+                model
+            );
         }
 
         if (disposeAfter) {
@@ -320,35 +302,63 @@ public class SettingsDialog extends JDialog {
     }
 
     private JPanel createAISettingsTab() {
-        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        JPanel panel = new JPanel(new GridBagLayout());
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.anchor = GridBagConstraints.NORTHWEST;
+        gbc.insets = new Insets(5, 5, 5, 5);
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
 
-        // --- Top Panel for Style Prompt ---
-        JPanel stylePanel = new JPanel(new BorderLayout(5,5));
-        stylePanel.add(new JLabel("General Style Prompt (optional):"), BorderLayout.NORTH);
+        gbc.gridwidth = 2;
+        panel.add(new JLabel("General Style Prompt (optional):"), gbc);
+        gbc.gridy++;
+        gbc.weighty = 0.4;
+        gbc.fill = GridBagConstraints.BOTH;
         generalStylePromptArea = new JTextArea(5, 40);
         generalStylePromptArea.setLineWrap(true);
         generalStylePromptArea.setWrapStyleWord(true);
         JScrollPane styleScrollPane = new JScrollPane(generalStylePromptArea);
-        stylePanel.add(styleScrollPane, BorderLayout.CENTER);
-        panel.add(stylePanel, BorderLayout.NORTH); // Add style prompt panel to top
+        panel.add(styleScrollPane, gbc);
+        gbc.weighty = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
 
-        // --- Center Panel for References ---
-        JPanel referencesPanel = new JPanel(new BorderLayout(5,5));
-        referencesPanel.add(new JLabel("AI References (optional, one per line - e.g., books, shows):"), BorderLayout.NORTH);
-        aiReferencesArea = new JTextArea(8, 40); // Give more lines for references
+        gbc.gridy++;
+        gbc.gridwidth = 1;
+        panel.add(new JLabel("Max Suggestion Length (chars):"), gbc);
+        gbc.gridx = 1;
+        maxLengthField = new JTextField(5);
+        panel.add(maxLengthField, gbc);
+
+        gbc.gridx = 0;
+        gbc.gridy++;
+        gbc.gridwidth = 2;
+        panel.add(new JLabel("AI Reference Examples (one per line):", SwingConstants.LEFT), gbc);
+        gbc.gridy++;
+        gbc.weighty = 0.6;
+        gbc.fill = GridBagConstraints.BOTH;
+        aiReferencesArea = new JTextArea(8, 40);
         aiReferencesArea.setLineWrap(true);
         aiReferencesArea.setWrapStyleWord(true);
-        JScrollPane referencesScrollPane = new JScrollPane(aiReferencesArea);
-        referencesPanel.add(referencesScrollPane, BorderLayout.CENTER);
-        panel.add(referencesPanel, BorderLayout.CENTER); // Add references panel to center
+        JScrollPane referenceScrollPane = new JScrollPane(aiReferencesArea);
+        panel.add(referenceScrollPane, gbc);
 
-        // --- Bottom Panel for Max Length ---
-        JPanel bottomAISettings = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        bottomAISettings.add(new JLabel("Max Suggestion Length (chars):"));
-        maxLengthField = new JTextField(5);
-        bottomAISettings.add(maxLengthField);
-        panel.add(bottomAISettings, BorderLayout.SOUTH); // Keep max length at bottom
+        return panel;
+    }
+
+    private JPanel createRewriteTab() {
+        JPanel panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+
+        panel.add(new JLabel("Default Rewrite Prompt:", SwingConstants.LEFT), BorderLayout.NORTH);
+
+        defaultRewritePromptArea = new JTextArea(10, 40);
+        defaultRewritePromptArea.setLineWrap(true);
+        defaultRewritePromptArea.setWrapStyleWord(true);
+        JScrollPane scrollPane = new JScrollPane(defaultRewritePromptArea);
+        panel.add(scrollPane, BorderLayout.CENTER);
 
         return panel;
     }

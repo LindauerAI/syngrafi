@@ -21,6 +21,16 @@ public class PreferencesManager {
     private Path keyFilePath;
     private ApiKeyEncryptor encryptor;
 
+    private static final String API_KEY = "apiKey";
+    private static final String API_PROVIDER = "apiProvider";
+    private static final String AUTOCOMPLETE_DELAY = "autocompleteDelay";
+    private static final String NUM_SUGGESTIONS = "numSuggestions";
+    private static final String DEFAULT_DIRECTORY = "defaultDirectory";
+    private static final String USE_DARK_THEME = "useDarkTheme";
+    private static final String DEFAULT_REWRITE_PROMPT = "defaultRewritePrompt";
+    private static final String ENCRYPTED_API_KEY = "x249refElwgeew34sf";
+    private static final String AI_REFERENCES = "aiReferences";
+
     public PreferencesManager() {
         prefsNode = Preferences.userRoot().node(PREFS_NODE_PATH);
 
@@ -53,14 +63,13 @@ public class PreferencesManager {
         }
         properties.putIfAbsent("provider", "OpenAI");
         properties.putIfAbsent("model", "gpt-4o");
-        properties.putIfAbsent("autocompleteDelay", "600");
+        properties.putIfAbsent("autocompleteDelay", "1000");
         properties.putIfAbsent("numSuggestions", "3");
         properties.putIfAbsent("theme", "System");
         properties.putIfAbsent("generalStylePrompt", "");
         properties.putIfAbsent("autocompleteMaxLength", "200");
         properties.putIfAbsent("recentFiles", "");
         properties.putIfAbsent("defaultPath", System.getProperty("user.dir"));
-        properties.putIfAbsent("aiReferences", "");
 
         if (Files.exists(securePropsFilePath)) {
             try (FileInputStream fis = new FileInputStream(securePropsFilePath.toFile())) {
@@ -128,10 +137,105 @@ public class PreferencesManager {
     }
 
     public String getAIReferences() {
-        return getPreference("aiReferences", "");
+        return prefsNode.get(AI_REFERENCES, "");
     }
 
     public void setAIReferences(String references) {
-        setPreference("aiReferences", references);
+        prefsNode.put(AI_REFERENCES, references);
+    }
+
+    public String getApiProvider() {
+        return prefsNode.get(API_PROVIDER, "OpenAI");
+    }
+
+    public void setApiProvider(String provider) {
+        prefsNode.put(API_PROVIDER, provider);
+    }
+
+    public String getAutocompleteDelay() {
+        return prefsNode.get(AUTOCOMPLETE_DELAY, "1000");
+    }
+
+    public void setAutocompleteDelay(String delay) {
+        prefsNode.put(AUTOCOMPLETE_DELAY, delay);
+    }
+
+    public String getNumSuggestions() {
+        return prefsNode.get(NUM_SUGGESTIONS, "3");
+    }
+
+    public void setNumSuggestions(String num) {
+        prefsNode.put(NUM_SUGGESTIONS, num);
+    }
+
+    public String getDefaultDirectory() {
+        return prefsNode.get(DEFAULT_DIRECTORY, System.getProperty("user.home"));
+    }
+
+    public void setDefaultDirectory(String dir) {
+        prefsNode.put(DEFAULT_DIRECTORY, dir);
+    }
+
+    public boolean getUseDarkTheme() {
+        return prefsNode.getBoolean(USE_DARK_THEME, false);
+    }
+
+    public void setUseDarkTheme(boolean useDark) {
+        prefsNode.putBoolean(USE_DARK_THEME, useDark);
+    }
+
+    public String getDefaultRewritePrompt() {
+        return prefsNode.get(DEFAULT_REWRITE_PROMPT, "Rewrite the selected text for clarity and conciseness, maintaining the same style. Do not provide multiple options or styling, just the raw text.");
+    }
+
+    public void setDefaultRewritePrompt(String prompt) {
+        prefsNode.put(DEFAULT_REWRITE_PROMPT, prompt);
+    }
+
+    public boolean hasApiKey() {
+        if (encryptor == null) return false;
+        String openAIKeyEnc = secureProperties.getProperty("apiKeyOpenAI", "");
+        String geminiKeyEnc = secureProperties.getProperty("apiKeyGemini", "");
+        return (!openAIKeyEnc.isEmpty() && !encryptor.decrypt(openAIKeyEnc).isEmpty()) || 
+               (!geminiKeyEnc.isEmpty() && !encryptor.decrypt(geminiKeyEnc).isEmpty());
+    }
+
+    public String getApiKey() {
+        if (encryptor == null) return null;
+        String encryptedKey = prefsNode.get(ENCRYPTED_API_KEY, null);
+        if (encryptedKey == null || encryptedKey.isEmpty()) {
+            return null;
+        }
+        try {
+            return encryptor.decrypt(encryptedKey);
+        } catch (Exception e) {
+            System.err.println("Failed to decrypt API key: " + e.getMessage());
+            return null;
+        }
+    }
+
+    public boolean setApiKey(String plainTextKey) {
+        if (encryptor == null) return false;
+        if (plainTextKey == null || plainTextKey.trim().isEmpty()) {
+             System.err.println("Attempted to set an empty API key.");
+             return false;
+        }
+        try {
+            String encryptedKey = encryptor.encrypt(plainTextKey);
+            if (encryptedKey.isEmpty()) {
+                 System.err.println("Encryption resulted in an empty string. API key not set.");
+                 return false;
+            }
+            prefsNode.put(ENCRYPTED_API_KEY, encryptedKey);
+            return true;
+        } catch (Exception e) {
+            System.err.println("Failed to encrypt and store API key: " + e.getMessage());
+            return false;
+        }
+    }
+
+    public void clearApiKey() {
+        prefsNode.remove(ENCRYPTED_API_KEY);
+        System.out.println("Stored API key cleared.");
     }
 }

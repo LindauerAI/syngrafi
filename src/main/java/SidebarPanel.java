@@ -35,6 +35,13 @@ public class SidebarPanel extends JPanel {
     // Callback to main editor?
     private Syngrafi parentFrame;
 
+    private JList<File> fileList;
+    private DefaultListModel<File> listModel;
+    private JLabel wordCountLabel;
+    private JLabel aiCharCountLabel;
+    private JLabel humanCharCountLabel;
+    private Timer updateTimer; // Timer to periodically update stats
+
     public SidebarPanel(Syngrafi parentFrame) {
         super(new BorderLayout());
         this.parentFrame = parentFrame;
@@ -62,6 +69,38 @@ public class SidebarPanel extends JPanel {
 
         // Auto-populate file tree initially:
         refreshFileTree();
+
+        // --- Bottom: Stats and Actions ---
+        JPanel bottomPanel = new JPanel();
+        bottomPanel.setLayout(new BoxLayout(bottomPanel, BoxLayout.Y_AXIS));
+
+        // Stats Panel
+        JPanel statsPanel = new JPanel(new GridLayout(0, 1, 2, 2));
+        statsPanel.setBorder(BorderFactory.createTitledBorder("Document Stats"));
+        wordCountLabel = new JLabel("Words: 0");
+        aiCharCountLabel = new JLabel("AI Chars: 0");
+        humanCharCountLabel = new JLabel("Human Chars: 0");
+        statsPanel.add(wordCountLabel);
+        statsPanel.add(aiCharCountLabel);
+        statsPanel.add(humanCharCountLabel);
+        bottomPanel.add(statsPanel);
+        bottomPanel.add(Box.createRigidArea(new Dimension(0, 10))); // Spacer
+
+        // Actions Panel
+        JPanel actionsPanel = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        JButton saveButton = new JButton("Save");
+        saveButton.addActionListener(e -> parentFrame.saveDocument());
+        actionsPanel.add(saveButton);
+        
+        JButton findButton = new JButton("Find/Replace");
+        findButton.addActionListener(e -> parentFrame.showFindReplaceDialog()); // Call method on parent frame
+        actionsPanel.add(findButton);
+        bottomPanel.add(actionsPanel);
+
+        add(bottomPanel, BorderLayout.SOUTH);
+
+        // Start timer to update stats periodically
+        setupUpdateTimer();
     }
 
 
@@ -351,5 +390,35 @@ public class SidebarPanel extends JPanel {
         }
     }
 
+    private void setupUpdateTimer() {
+        updateTimer = new Timer(2000, e -> updateStats()); // Update every 2 seconds
+        updateTimer.setInitialDelay(500); // Initial update after 0.5s
+        updateTimer.start();
+    }
+    
+    // Public method to stop the timer when the panel is no longer needed
+    public void stopUpdateTimer() {
+         if (updateTimer != null && updateTimer.isRunning()) {
+             updateTimer.stop();
+         }
+    }
+
+    // Call this method to update the stats display
+    public void updateStats() {
+        TextEditor editor = parentFrame.getTextEditor();
+        if (editor != null) {
+            // Call editor's methods to get current stats
+            int words = editor.countWords(); // Assuming countWords is now public
+            int aiChars = editor.getAICharCount();
+            int humanChars = editor.getHumanCharCount();
+
+            // Update labels (ensure Swing updates happen on EDT)
+            SwingUtilities.invokeLater(() -> {
+                wordCountLabel.setText("Words: " + words);
+                aiCharCountLabel.setText("AI Chars: " + aiChars);
+                humanCharCountLabel.setText("Human Chars: " + humanChars);
+            });
+        }
+    }
 }
 

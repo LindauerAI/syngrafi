@@ -31,6 +31,7 @@ import java.util.concurrent.TimeUnit;
 
 import java.net.URL;
 import java.net.MalformedURLException;
+import java.io.File;
 
 /**
  * A text editor that uses HTMLEditorKit for formatting,
@@ -58,6 +59,11 @@ public class TextEditor extends JTextPane {
     // Track if doc has unsaved changes
     private boolean isDirty = false;
     private int activeHeadingLevel = 0;
+
+    // Autocomplete trigger tracking
+    private int consecutiveCharsTyped = 0;
+    private long lastCharTypedTimestamp = 0;
+    private static final long TYPING_RESET_THRESHOLD_MS = 1500; // Reset counter if pause > 1.5s
 
     public TextEditor(JLabel statusBar, PreferencesManager prefs) {
         this.statusBar = statusBar;
@@ -96,16 +102,16 @@ public class TextEditor extends JTextPane {
             URL dictionaryUrl = getClass().getClassLoader().getResource("dictionaries/");
             if (dictionaryUrl == null) {
                 System.err.println("Error: Could not find 'dictionaries' folder in classpath/resources.");
-                 statusBar.setText("Spellcheck dictionary path not found.");
+                statusBar.setText("Spellcheck dictionary path not found.");
                 return;
             }
 
             // Set JOrtho properties (including dictionary path)
             SpellChecker.setUserDictionaryProvider(new FileUserDictionary());
             // Register the English dictionary (adjust file name if needed)
-             // JOrtho might automatically find .ortho or .dic/.aff files
-             SpellChecker.registerDictionaries(null, "en"); 
-             // Or specify exact file: SpellChecker.registerDictionary(dictionaryUrl.toString(), "dictionary_en.ortho");
+            // JOrtho might automatically find .ortho or .dic/.aff files
+            SpellChecker.registerDictionaries(null, "en");
+            // Or specify exact file: SpellChecker.registerDictionary(dictionaryUrl.toString(), "dictionary_en.ortho");
 
             // Register this text component with the SpellChecker
             SpellChecker.register(this);
@@ -114,7 +120,7 @@ public class TextEditor extends JTextPane {
             // SpellChecker.enableChecker(this, true); // Might conflict with other popups, enable if needed
 
             System.out.println("JOrtho initialized.");
-             statusBar.setText("Spellchecker initialized.");
+            statusBar.setText("Spellchecker initialized.");
 
         } catch (Exception e) {
             System.err.println("Error initializing JOrtho: " + e.getMessage());
@@ -147,167 +153,171 @@ public class TextEditor extends JTextPane {
     }
 
     /**
-     * Override processKeyEvent to handle Enter/Shift+Enter in lists and headings
+     * Override processKeyEvent to handle Enter/Backspace within lists.
      */
     @Override
     protected void processKeyEvent(KeyEvent e) {
-                        HTMLDocument doc = (HTMLDocument) getDocument();
-        HTMLEditorKit kit = (HTMLEditorKit) getEditorKit();
-                        int caretPos = getCaretPosition();
-
         if (e.getID() == KeyEvent.KEY_PRESSED) {
-            // --- Enter Key Handling ---
-            if (e.getKeyCode() == KeyEvent.VK_ENTER) {
-                Element currentPara = doc.getParagraphElement(caretPos);
-                Element parentLi = findParentElement(currentPara, HTML.Tag.LI);
+            int caretPos = getCaretPosition();
+            HTMLDocument doc = (HTMLDocument) getDocument();
+            HTMLEditorKit kit = (HTMLEditorKit) getEditorKit();
+            Element currentPara = doc.getParagraphElement(caretPos);
+            Element parentLi = findParentElement(currentPara, HTML.Tag.LI);
 
-                if (parentLi != null) {
-                    // ENTER pressed within an LI element
-                    try {
-                        if (e.isShiftDown()) {
-                            // Shift+Enter: Insert <br>
-                            kit.insertHTML(doc, caretPos, "<br>", 0, 0, HTML.Tag.BR);
-                        } else {
-                            // Regular Enter:
+            if (parentLi != null) {
+                // Key pressed within an LI element
+                if (e.getKeyCode() == KeyEvent.VK_ENTER) {
+                    if (!e.isShiftDown()) {
+                        // Handle regular Enter
+                        try {
                             handleEnterInListItem(doc, kit, parentLi, caretPos);
+                            e.consume(); // Consume the event
+                            return;
+                        } catch (Exception ex) {
+                            System.err.println("Error handling Enter in list item: " + ex.getMessage());
+                            // Allow default action as fallback on error
                         }
-                        e.consume(); // Consume the event as we handled it
-                        return;
-                    } catch (Exception ex) {
-                        ex.printStackTrace();
-                        // Let super handle if error occurs?
                     }
-                } else {
-                    // ENTER pressed outside a list item
-                    // Check if we are exiting a heading
-                if (activeHeadingLevel != 0) {
-                    SwingUtilities.invokeLater(this::revertHeadingMode);
-                         // Default action (insert paragraph) will execute after revert
-                } else if (isCaretInHeading()) {
-                    SwingUtilities.invokeLater(this::setNormalText);
-                         // Default action will execute after setting normal
-                    }
-                    // Allow default Enter action (creates new <p>) if not in list or heading
-                }
-            } 
-            // --- Backspace Key Handling ---
-            else if (e.getKeyCode() == KeyEvent.VK_BACK_SPACE) {
-                Element currentPara = doc.getParagraphElement(caretPos);
-                Element parentLi = findParentElement(currentPara, HTML.Tag.LI);
-
-                if (parentLi != null && caretPos == parentLi.getStartOffset()) {
-                     // BACKSPACE pressed at the very beginning of an LI element
+                    // Allow default action for Shift+Enter (should insert <br> via default kit behavior)
+                
+                } else if (e.getKeyCode() == KeyEvent.VK_BACK_SPACE) {
+                     // Handle Backspace only if caret is at the very start of the LI content area
+                     Element body = findParentElement(parentLi, HTML.Tag.BODY); // Find body to check document start
+                     int liContentStartOffset = parentLi.getStartOffset() + parentLi.getName().length() + 2; // Approx start after <li> tag
+                     
+                     // More robust check for start: Is caret position <= offset after opening tag?
                      try {
-                         handleBackspaceAtListItemStart(doc, kit, parentLi);
-                         e.consume(); // Consume the event as we handled it
-                         return;
-                     } catch (Exception ex) {
-                         ex.printStackTrace();
-                         // Let super handle if error occurs?
-                     }
-                } 
-                 // Allow default Backspace action if not at the start of LI or if outside a list
-            }
-        }
-        // Always call super for other keys or unhandled/errored cases
-        super.processKeyEvent(e);
+                         String liStartText = doc.getText(parentLi.getStartOffset(), caretPos - parentLi.getStartOffset());
+                         if (!liStartText.contains(">")) { // If caret is before the closing > of <li>
+                            liContentStartOffset = caretPos + 1; // Adjust if needed, but caret is likely *at* content start
+                         }
+                     } catch (BadLocationException ex) { /* ignore */ }
+
+                     if (caretPos <= liContentStartOffset || caretPos == parentLi.getStartOffset()) {
+                        try {
+                            handleBackspaceAtListItemStart(doc, kit, parentLi);
+                            e.consume(); // Consume the event
+                            return;
+                        } catch (Exception ex) {
+                            System.err.println("Error handling Backspace in list item: " + ex.getMessage());
+                            // Allow default action as fallback on error
+                        }
+                     } // else: Allow default backspace within LI content
+                }
+            } // else: Key pressed outside LI, fall through to default handling
+        } 
+        // Default handling for other keys or if not consumed
+        super.processKeyEvent(e); 
     }
 
     /** Handles Enter key press within a list item */
     private void handleEnterInListItem(HTMLDocument doc, HTMLEditorKit kit, Element liElement, int caretPos)
             throws BadLocationException, IOException {
-
+        
         int liStart = liElement.getStartOffset();
         int liEnd = liElement.getEndOffset();
-        String liContent = doc.getText(liStart, liEnd - liStart);
+        Element listElement = liElement.getParentElement();
+        int listElementStart = listElement.getStartOffset(); // Store original list start
 
-        // Check if the list item is effectively empty (might contain formatting tags or just whitespace)
+        String liContent = doc.getText(liStart, liEnd - liStart);
         String textContent = liContent.replaceAll("<[^>]*>", "").trim();
 
         if (textContent.isEmpty()) {
             // --- Enter on an Empty List Item: Exit the list ---
-            Element listElement = liElement.getParentElement(); // UL or OL
-            int listStart = listElement.getStartOffset();
-            int listEnd = listElement.getEndOffset();
+            doc.remove(liStart, liEnd - liStart); // Remove the empty <li>
+            
+            // Check if list is now empty *after* removal (by checking element count)
+            // Re-fetch list element if possible, using original start offset as anchor
+            Element updatedListElement = doc.getCharacterElement(listElementStart).getParentElement();
+            boolean listRemoved = false;
+            int insertPPos = listElementStart; // Default insert position
+            if (updatedListElement != null && updatedListElement.getName().matches("ol|ul") && updatedListElement.getElementCount() == 0) { 
+                 doc.remove(updatedListElement.getStartOffset(), updatedListElement.getEndOffset() - updatedListElement.getStartOffset());
+                 listRemoved = true;
+            } else if (updatedListElement != null && updatedListElement.getName().matches("ol|ul")) {
+                // List still exists, insert P *after* it
+                 insertPPos = updatedListElement.getEndOffset();
+            } // else: structure changed unexpectedly, insert at original list start
 
-            // Remove the empty <li>
-            doc.remove(liStart, liEnd - liStart);
+            kit.insertHTML(doc, insertPPos, "<p></p>", 0, 0, HTML.Tag.P);
+            // Set caret just inside the new <p> tag
+            setCaretPosition(insertPPos + "<p>".length());
 
-            // Check if the list itself is now empty
-            if (listElement.getElementCount() <= 1) { // <= 1 because structure updates are pending
-                doc.remove(listStart, listEnd - listStart); // Remove the list tags
-                 // Insert a new paragraph where the list was
-                 kit.insertHTML(doc, listStart, "<p></p>", 0, 0, HTML.Tag.P);
-                 setCaretPosition(listStart + "<p>".length()); // Position in new P
-            } else {
-                // List not empty, insert paragraph *after* the list
-                kit.insertHTML(doc, listEnd, "<p></p>", 0, 0, HTML.Tag.P);
-                setCaretPosition(listEnd + "<p>".length()); // Position in new P
-            }
         } else {
             // --- Enter on Non-Empty List Item: Split the item ---
-            // Extract content from caret position to the end of the LI
-            String htmlToMove = getHtmlFragment(doc, kit, caretPos, liEnd - 1); // Get HTML fragment to move
-
-            // Remove the content that will be moved
-            if (caretPos < liEnd -1) {
-                 doc.remove(caretPos, (liEnd - 1) - caretPos);
+            String htmlToMove = getHtmlFragment(doc, kit, caretPos, liEnd - 1); 
+            int originalLengthToMove = (liEnd - 1) - caretPos;
+            
+            // Remove content to move *before* inserting new structure
+            if (originalLengthToMove > 0) {
+                doc.remove(caretPos, originalLengthToMove);
             }
+            
+            // Insert the closing tag for the current li, and the opening for the new one
+            // Adjust insertion position slightly if we removed content
+            int insertSplitPos = caretPos; 
+            kit.insertHTML(doc, insertSplitPos, "</li><li>" + htmlToMove, 0, 1, HTML.Tag.LI);
 
-            // Insert new <li> tag after the current one
-            // Using insertHTML at the *end* of the current LI's content seems most reliable
-            int insertPos = liElement.getEndOffset() - 1; // Position before closing </li>
-            kit.insertHTML(doc, insertPos, "</li><li>" + htmlToMove, 0, 1, HTML.Tag.LI);
-
-            // Find the newly created LI element (heuristic: next element after original LI end)
-            Element newLi = doc.getParagraphElement(liElement.getEndOffset() + 1); // Approximate position
-             if (newLi != null && newLi.getName().equals("li")) {
-                 setCaretPosition(newLi.getStartOffset()); // Position caret at start of new LI
-             } else {
-                 // Fallback if new LI not found easily
-                 setCaretPosition(liElement.getEndOffset()); // Place caret after original LI
-             }
+            // Set caret at the beginning of the new list item's content
+            // Position is after the inserted </li><li> tags
+            setCaretPosition(insertSplitPos + "</li><li>".length()); 
         }
     }
 
     /** Handles Backspace key press at the start of a list item */
     private void handleBackspaceAtListItemStart(HTMLDocument doc, HTMLEditorKit kit, Element liElement)
             throws BadLocationException, IOException {
-
         Element listElement = liElement.getParentElement();
         int liIndex = listElement.getElementIndex(liElement.getStartOffset());
+        int liStart = liElement.getStartOffset();
+        int liEnd = liElement.getEndOffset();
+        int listStartOffset = listElement.getStartOffset(); // Store original list start
+        
+        // Extract content *before* any removals
+        String liInnerHtml = getElementHtml(doc, liElement, false);
 
         if (liIndex == 0) {
-            // --- Backspace on the *first* list item ---
-            // Convert this item back to a paragraph
-            String liInnerHtml = getElementHtml(doc, liElement, false);
-            doc.remove(liElement.getStartOffset(), liElement.getEndOffset() - liElement.getStartOffset());
+            // --- Backspace on the *first* list item: Convert to paragraph ---
+            int currentCaretPos = listStartOffset + 1; // Expected caret pos in new P
+            doc.remove(liStart, liEnd - liStart); // Remove the <li> element
+            
+            // Check if list is now empty *after* removal
+            Element updatedListElement = doc.getCharacterElement(listStartOffset).getParentElement();
+            boolean listRemoved = false;
+            if (updatedListElement != null && updatedListElement.getName().matches("ol|ul") && updatedListElement.getElementCount() == 0) { 
+                 doc.remove(updatedListElement.getStartOffset(), updatedListElement.getEndOffset() - updatedListElement.getStartOffset());
+                 listRemoved = true;
+            } // else: list still has items
+            
+            // Insert the content as a paragraph where the list started (or where the LI was if list remains)
+            int insertPPos = listRemoved ? listStartOffset : liStart; 
+            kit.insertHTML(doc, insertPPos, "<p>" + liInnerHtml + "</p>", 0, 0, HTML.Tag.P);
+            setCaretPosition(insertPPos + 1); // Position inside the new P tag
 
-            // If this was the ONLY item, remove the list tag too
-            if (listElement.getElementCount() <= 1) {
-                doc.remove(listElement.getStartOffset(), listElement.getEndOffset() - listElement.getStartOffset());
-                // Insert the content as a paragraph where the list started
-                kit.insertHTML(doc, listElement.getStartOffset(), "<p>" + liInnerHtml + "</p>", 0, 0, HTML.Tag.P);
-                setCaretPosition(listElement.getStartOffset() + 1); // Position inside the new P
-            } else {
-                // List has other items, insert the content as a paragraph *before* the list
-                kit.insertHTML(doc, listElement.getStartOffset(), "<p>" + liInnerHtml + "</p>", 0, 0, HTML.Tag.P);
-                 setCaretPosition(listElement.getStartOffset() + 1); // Position inside the new P
-            }
         } else {
-            // --- Backspace on a subsequent list item: Merge with previous item ---
+            // --- Backspace on a subsequent list item: Merge with previous ---
             Element prevLiElement = listElement.getElement(liIndex - 1);
-            int prevLiEnd = prevLiElement.getEndOffset() - 1; // Before closing tag
+            int prevLiEnd = prevLiElement.getEndOffset() - 1; // Position before closing tag </li>
+            int caretTargetPos = prevLiEnd; // Target caret position after merge
 
-            // Get content of current LI and append it to the previous one
-            String currentLiInnerHtml = getElementHtml(doc, liElement, false);
-            kit.insertHTML(doc, prevLiEnd, currentLiInnerHtml, 0, 0, null);
-
-            // Remove the current LI element
-            doc.remove(liElement.getStartOffset(), liElement.getEndOffset() - liElement.getStartOffset());
+            // Insert current content into previous LI *before* removing current LI
+            if (!liInnerHtml.isEmpty()) {
+                kit.insertHTML(doc, prevLiEnd, liInnerHtml, 0, 0, null); 
+            }
+            
+            // Now remove the current LI element
+            // Recalculate start/end as insertion might have changed offsets
+            Element currentLiAgain = doc.getParagraphElement(caretTargetPos + liInnerHtml.length()).getParentElement(); // Try to re-find LI after insertion
+            if (currentLiAgain != null && currentLiAgain.getName().equals("li")) { // Ensure it's the correct LI
+                 doc.remove(currentLiAgain.getStartOffset(), currentLiAgain.getEndOffset() - currentLiAgain.getStartOffset());
+            } else { 
+                 // Fallback: Remove based on original offsets (might fail if offsets shifted too much)
+                 System.err.println("Warning: Could not reliably find LI after merging, attempting removal with original offsets.");
+                 doc.remove(liStart, liEnd - liStart);
+            }
 
             // Set caret position to where the merge happened
-            setCaretPosition(prevLiEnd);
+            setCaretPosition(caretTargetPos);
         }
     }
 
@@ -319,6 +329,31 @@ public class TextEditor extends JTextPane {
         kit.write(sw, doc, start, end - start);
         return sw.toString();
     }
+    
+    /** Helper to get the inner HTML content of an element */
+    private String getElementHtml(HTMLDocument doc, Element el, boolean includeTag) throws BadLocationException, IOException {
+        StringWriter sw = new StringWriter();
+        int start = el.getStartOffset();
+        int end = el.getEndOffset();
+        if (!includeTag) {
+            String fullText = doc.getText(start, end - start);
+            int openTagEnd = fullText.indexOf('>');
+            int closeTagStart = fullText.lastIndexOf('<');
+            if (openTagEnd != -1 && closeTagStart != -1 && openTagEnd < closeTagStart) {
+                start = start + openTagEnd + 1;
+                end = start + closeTagStart - (openTagEnd + 1);
+            } else {
+                 return ""; // Cannot find tags, assume empty content
+            }
+        }
+        start = Math.max(el.getStartOffset(), start);
+        end = Math.min(el.getEndOffset(), end);
+        if (start >= end) return "";
+
+        HTMLEditorKit kit = (HTMLEditorKit) getEditorKit();
+        kit.write(sw, doc, start, end - start);
+        return sw.toString();
+    }
 
     /** Helper to find a parent element of a specific tag */
     private Element findParentElement(Element startElement, HTML.Tag tag) {
@@ -326,6 +361,10 @@ public class TextEditor extends JTextPane {
         while (parent != null) {
             if (parent.getName().equals(tag.toString())) {
                 return parent;
+            }
+            // Stop searching if we hit the body or html tag without finding the target
+            if (parent.getName().equals("body") || parent.getName().equals("html")) {
+                 return null;
             }
             parent = parent.getParentElement();
         }
@@ -356,24 +395,48 @@ public class TextEditor extends JTextPane {
         getDocument().addDocumentListener(new DocumentListener() {
             @Override
             public void insertUpdate(DocumentEvent e) {
+                // Check if the change was likely a single character type
+                boolean isSingleCharInsert = (e.getLength() == 1);
+                boolean isMultiCharInsert = (e.getLength() > 1);
+
+                if (isSingleCharInsert) {
+                    long now = System.currentTimeMillis();
+                    if (now - lastCharTypedTimestamp > TYPING_RESET_THRESHOLD_MS) {
+                        consecutiveCharsTyped = 0; // Reset on pause
+                    }
+                    consecutiveCharsTyped++;
+                    lastCharTypedTimestamp = now;
+                } else {
+                    // Reset counter for multi-char inserts (paste, etc.) or complex changes
+                    consecutiveCharsTyped = 0;
+                }
+                
                 isDirty = true;
-                scheduleAutocomplete();
-                updateStatusBarInfo(); // Update status bar on insert
+
+                // Schedule autocomplete only if 2+ chars typed recently
+                if (consecutiveCharsTyped >= 2) { 
+                    scheduleAutocomplete();
+                } else {
+                    // If fewer than 2 chars typed (or counter reset), cancel any pending/visible autocomplete
+                    cancelAutoComplete(); 
+                }
+                updateStatusBarInfo();
             }
 
             @Override
             public void removeUpdate(DocumentEvent e) {
-                isDirty = true;
-                scheduleAutocomplete();
-                updateStatusBarInfo(); // Update status bar on remove
+                 isDirty = true;
+                 consecutiveCharsTyped = 0; // Reset trigger count
+                 cancelAutoComplete(); // Cancel autocomplete on backspace/delete
+                 updateStatusBarInfo();
             }
 
             @Override
             public void changedUpdate(DocumentEvent e) {
                 isDirty = true;
-                 // Attribute changes (like bold) might not affect word count
-                 // but we can update status bar anyway for consistency or if needed later
-                 updateStatusBarInfo();
+                updateStatusBarInfo();
+                // Reset autocomplete trigger on attribute change
+                consecutiveCharsTyped = 0; 
             }
         });
     }
@@ -416,15 +479,16 @@ public class TextEditor extends JTextPane {
     }
 
     private void scheduleAutocomplete() {
-        if (isAnyDialogVisible()) return; // Don't schedule if a dialog is open
+        if (isAnyDialogVisible()) return; 
         if (isAutocompleteActive || currentProvider == null) return;
 
-        int delay = 600;
+        int delay = 1000; // Default delay updated
         try {
-            delay = Integer.parseInt(prefs.getPreference("autocompleteDelay", "600"));
-            if (delay < 0) delay = 600;
+            // Update default value used in getPreference call
+            delay = Integer.parseInt(prefs.getPreference("autocompleteDelay", "1000")); 
+            if (delay < 0) delay = 1000; // Ensure non-negative, use updated default
         } catch (Exception ex) {
-            delay = 600;
+            delay = 1000; // Use updated default on error
         }
 
         autocompleteTimer.cancel();
@@ -932,224 +996,32 @@ public class TextEditor extends JTextPane {
     }
 
     public void applyOrderedList() {
-        applyList(HTML.Tag.OL);
+        // Use the standard HTMLEditorKit action fetched from the kit by name
+        Action listAction = getActionByName("InsertOrderedList"); // Use String name
+        if (listAction != null) {
+            listAction.actionPerformed(new ActionEvent(this, ActionEvent.ACTION_PERFORMED, ""));
+            isDirty = true;
+            requestFocusInWindow(); // Ensure focus remains
+        } else {
+            System.err.println("Could not find InsertOrderedList action!");
+        }
     }
 
     public void applyUnorderedList() {
-        applyList(HTML.Tag.UL);
-    }
-
-    /** Generic method to apply/toggle lists based on selection, using manual HTML manipulation */
-    private void applyList(HTML.Tag listTag) {
-        HTMLEditorKit kit = (HTMLEditorKit) getEditorKit();
-            HTMLDocument doc = (HTMLDocument) getDocument();
-            int start = getSelectionStart();
-            int end = getSelectionEnd();
-        int initialCaretPos = getCaretPosition();
-
-        // Determine the range of paragraphs affected by the selection
-        Element startPara = doc.getParagraphElement(start);
-        Element endPara = doc.getParagraphElement(end == start ? start : end - 1); // Handle caret position vs selection end
-
-        // Check if the *entire* affected range is already within a list of the *same* type
-        boolean isAlreadyList = checkSelectionIsListType(doc, startPara, endPara, listTag);
-
-        try {
-            if (isAlreadyList) {
-                // --- TOGGLE OFF: Convert selected list items back to paragraphs ---
-                convertListItemsToParagraphs(doc, kit, startPara, endPara, listTag);
-                statusBar.setText("Removed list formatting.");
-            } else {
-                // --- TOGGLE ON: Convert selected paragraphs to list items ---
-                convertParagraphsToListItems(doc, kit, startPara, endPara, listTag);
-                statusBar.setText("Applied list formatting.");
-            }
-                isDirty = true;
-            // Caret positioning might need adjustment after major structure changes
-            // Placing it at the start of the modified section is a safe default
-            // More sophisticated positioning could be added later if needed.
-             SwingUtilities.invokeLater(() -> setCaretPosition(startPara.getStartOffset()));
-
-        } catch (BadLocationException | IOException ex) {
-            ex.printStackTrace();
-            statusBar.setText("Error applying list formatting: " + ex.getMessage());
+        // Use the standard HTMLEditorKit action fetched from the kit by name
+        Action listAction = getActionByName("InsertUnorderedList"); // Use String name
+        if (listAction != null) {
+            listAction.actionPerformed(new ActionEvent(this, ActionEvent.ACTION_PERFORMED, ""));
+            isDirty = true;
+            requestFocusInWindow(); // Ensure focus remains
+        } else {
+            System.err.println("Could not find InsertUnorderedList action!");
         }
     }
 
-    /** Checks if all paragraphs from startPara to endPara are LI elements within the specified listTag */
-    private boolean checkSelectionIsListType(HTMLDocument doc, Element startPara, Element endPara, HTML.Tag listTag) {
-        Element commonListParent = null;
-        Element currentPara = startPara;
-
-        while (currentPara != null && currentPara.getStartOffset() <= endPara.getStartOffset()) {
-            Element li = findParentElement(currentPara, HTML.Tag.LI);
-            if (li == null) return false; // Not a list item
-
-            Element list = findParentElement(li, listTag);
-            if (list == null) return false; // Not in the correct list type
-
-            if (commonListParent == null) {
-                commonListParent = list; // First list found
-            } else if (commonListParent != list) {
-                return false; // Selection spans different lists
-            }
-
-            if (currentPara.getEndOffset() >= doc.getLength() || currentPara == endPara) break;
-            currentPara = doc.getParagraphElement(currentPara.getEndOffset()); // Move to the next paragraph
-        }
-        return commonListParent != null; // True if all were LIs in the same listTag parent
-    }
-
-    /** Converts P elements within the range into LI elements of the specified listTag */
-    private void convertParagraphsToListItems(HTMLDocument doc, HTMLEditorKit kit, Element startPara, Element endPara, HTML.Tag listTag)
-            throws BadLocationException, IOException {
-
-        int rangeStart = startPara.getStartOffset();
-        // Ensure end offset covers the *entire* last paragraph selected
-        int rangeEnd = endPara.getEndOffset(); 
-
-        // Extract the inner HTML of all paragraphs within the determined range
-        StringBuilder contentToConvert = new StringBuilder();
-        Element currentPara = startPara;
-        while (currentPara != null && currentPara.getStartOffset() < rangeEnd) {
-             // Ensure we don't go beyond the intended end paragraph
-             if (currentPara.getStartOffset() >= endPara.getEndOffset()) break;
-             
-             String pInnerHtml = getElementHtml(doc, currentPara, false); // Get content only
-             // Wrap content in LI tags
-             contentToConvert.append("<li>").append(pInnerHtml.isEmpty() ? " " : pInnerHtml).append("</li>");
-
-            // Move to the next paragraph element logically
-            int nextParaOffset = currentPara.getEndOffset();
-            if (nextParaOffset >= doc.getLength()) break;
-            currentPara = doc.getParagraphElement(nextParaOffset);
-             // Safety check for loops or unexpected structure
-             if (currentPara == null || currentPara.getStartOffset() < nextParaOffset) break; 
-        }
-
-        // Build the final list HTML
-        String listHtml = "<" + listTag.toString() + ">" + contentToConvert.toString() + "</" + listTag.toString() + ">";
-
-        // Perform a single replacement: remove original range, insert new list
-        if (rangeEnd > rangeStart) { // Ensure valid range
-             doc.remove(rangeStart, rangeEnd - rangeStart);
-             kit.insertHTML(doc, rangeStart, listHtml, 0, 0, listTag);
-            } else {
-            // If range is zero/negative (e.g., empty selection at start), just insert an empty list
-             kit.insertHTML(doc, rangeStart, "<" + listTag.toString() + "><li> </li></" + listTag.toString() + ">", 0, 0, listTag);
-        }
-    }
-
-    /** Converts LI elements within the range back to P elements */
-    private void convertListItemsToParagraphs(HTMLDocument doc, HTMLEditorKit kit, Element startLiPara, Element endLiPara, HTML.Tag listTag)
-            throws BadLocationException, IOException {
-
-        Element listElement = findParentElement(startLiPara, listTag);
-        if (listElement == null) return; 
-
-        // Determine the actual start and end LI elements based on the paragraph elements
-        Element startLi = findParentElement(startLiPara, HTML.Tag.LI);
-        Element endLi = findParentElement(endLiPara, HTML.Tag.LI);
-
-        if (startLi == null || endLi == null || findParentElement(startLi, listTag) != listElement || findParentElement(endLi, listTag) != listElement) {
-             System.err.println("Error: Selection for list removal is invalid or spans multiple lists.");
-             return;
-        }
-
-        // Define the exact range to replace (from start of first LI to end of last LI)
-        int rangeStart = startLi.getStartOffset();
-        int rangeEnd = endLi.getEndOffset();
-
-        // Extract inner HTML of all selected LI elements
-        StringBuilder contentToConvert = new StringBuilder();
-        Element currentLi = startLi;
-        while (currentLi != null && currentLi.getStartOffset() < rangeEnd) {
-             // Ensure we don't go beyond the intended end LI
-             if (currentLi.getStartOffset() >= endLi.getEndOffset()) break;
-
-             String liInnerHtml = getElementHtml(doc, currentLi, false); // Get content only
-             // Wrap content in P tags
-             contentToConvert.append("<p>").append(liInnerHtml.isEmpty() ? " " : liInnerHtml).append("</p>");
-
-             // Move to the next LI element logically
-             int nextLiOffset = currentLi.getEndOffset();
-             if (nextLiOffset >= listElement.getEndOffset()) break; // Stop if we reach end of parent list
-             
-             // Find the next element - might not be immediately adjacent paragraph
-             Element nextElement = doc.getCharacterElement(nextLiOffset); 
-             if(nextElement == null) break; // Should not happen
-             
-             Element nextLi = findParentElement(nextElement, HTML.Tag.LI);
-             // Ensure the next LI is still within the same parent list
-             if (nextLi == null || findParentElement(nextLi, listTag) != listElement) break;
-             
-              // Safety check for loops
-              if (nextLi.getStartOffset() <= currentLi.getStartOffset()) break;
-              
-             currentLi = nextLi;
-        }
-
-        // Perform a single replacement: remove original range, insert new paragraphs
-        if (rangeEnd > rangeStart) { // Ensure valid range
-             doc.remove(rangeStart, rangeEnd - rangeStart);
-             if (contentToConvert.length() > 0) {
-                kit.insertHTML(doc, rangeStart, contentToConvert.toString(), 0, 0, HTML.Tag.P);
-             }
-        } 
-        // If range is invalid, do nothing
-    }
-
-    /** Helper to get the HTML content of an element */
-    private String getElementHtml(HTMLDocument doc, Element el, boolean includeTag) throws BadLocationException, IOException {
-        StringWriter sw = new StringWriter();
-        int start = el.getStartOffset();
-        int end = el.getEndOffset();
-        if (!includeTag) {
-             // Try to get offsets inside the tag
-             start++; // Skip opening tag char like '>' (approximate)
-             end--;   // Skip closing tag char like '<' (approximate)
-             // Find actual content boundaries more accurately
-             String fullText = doc.getText(el.getStartOffset(), el.getEndOffset() - el.getStartOffset());
-             int openTagEnd = fullText.indexOf('>');
-             int closeTagStart = fullText.lastIndexOf('<');
-             if(openTagEnd != -1 && closeTagStart != -1 && openTagEnd < closeTagStart) {
-                 start = el.getStartOffset() + openTagEnd + 1;
-                 end = el.getStartOffset() + closeTagStart;
-             }
-        }
-        // Ensure start and end are valid
-        start = Math.max(el.getStartOffset(), start);
-        end = Math.min(el.getEndOffset(), end);
-        if (start >= end) return ""; // No inner content
-
-        HTMLEditorKit kit = (HTMLEditorKit) getEditorKit();
-        kit.write(sw, doc, start, end - start);
-        return sw.toString();
-    }
-
-    /** Helper to find the lowest common ancestor element in the document tree */
-    private Element findLowestCommonAncestor(Element e1, Element e2) {
-        if (e1 == null || e2 == null) return null;
-        java.util.List<Element> path1 = getPathToRoot(e1);
-        java.util.List<Element> path2 = getPathToRoot(e2);
-
-        Element ancestor = null;
-        int i = 0;
-        while (i < path1.size() && i < path2.size() && path1.get(i) == path2.get(i)) {
-            ancestor = path1.get(i);
-            i++;
-        }
-        return ancestor;
-    }
-
-    /** Helper to get the path from an element to the root */
-    private java.util.List<Element> getPathToRoot(Element e) {
-        java.util.List<Element> path = new java.util.ArrayList<>();
-        while (e != null) {
-            path.add(0, e); // Add at the beginning to build path from root
-            e = e.getParentElement();
-        }
-        return path;
+    /** Helper to get an action from the editor kit's action map by its name */
+    private Action getActionByName(String name) {
+        return getActionMap().get(name); // JTextComponent provides getActionMap
     }
 
     public void applyAlignment(int alignment) {
@@ -1333,7 +1205,7 @@ public class TextEditor extends JTextPane {
     }
 
     /** Calculates word count from the editor's HTML content */
-    private int countWords() {
+    public int countWords() {
          String htmlText = getText(); // Get current HTML text
          // Regex to remove HTML tags
          String textOnly = htmlText.replaceAll("<[^>]+>", " ");
@@ -1346,45 +1218,95 @@ public class TextEditor extends JTextPane {
          return textOnly.split("\\s+").length;
     }
 
-    /** Removes all formatting (bold, italic, lists, etc.) from the current selection */
-    public void clearFormatting() {
+    /**
+     * Replaces the currently selected text with the provided rewritten text.
+     * Tracks the change as AI-generated and adds it to the undo manager.
+     * @param rewriteText The text to replace the selection with.
+     */
+    public void replaceSelectionWithRewrite(String rewriteText) {
         int start = getSelectionStart();
         int end = getSelectionEnd();
 
         if (start == end) {
-            // No selection, maybe clear formatting for the current paragraph?
-            // For now, let's only act on selections.
-            statusBar.setText("Select text to clear formatting.");
+            // No selection, maybe insert instead?
+            // For now, just do nothing if there's no selection.
+            statusBar.setText("Rewrite requires a text selection.");
             return;
         }
 
         try {
-            HTMLDocument doc = (HTMLDocument) getDocument();
-            String selectedText = doc.getText(start, end - start);
+            StyledDocument sdoc = (StyledDocument) getDocument();
+            // Get attributes from the start of the selection to apply to the new text
+            AttributeSet attrs = sdoc.getCharacterElement(start).getAttributes();
 
-            // Replace the selection with its plain text equivalent
-            // First remove the original formatted content
-            doc.remove(start, end - start);
-            
-            // Prepare default attributes (simple paragraph, default font)
-            SimpleAttributeSet attrs = new SimpleAttributeSet();
-            StyleConstants.setFontFamily(attrs, "Georgia"); // Match default font
-            StyleConstants.setFontSize(attrs, 12); // Match default size
-            // Ensure basic paragraph structure if needed
-            // HTMLEditorKit might handle this when inserting plain text.
-            
-            // Insert plain text using HTMLEditorKit to handle paragraph structure
-            HTMLEditorKit kit = (HTMLEditorKit) getEditorKit();
-            // Escape HTML in the plain text before inserting to prevent misinterpretation
-            kit.insertHTML(doc, start, escapeHTML(selectedText), 0, 0, null); 
-            
+            // Record edit for undo
+            undoManager.addEdit(new ReplaceEdit(sdoc, start, end - start, rewriteText, attrs));
+
+            // Perform replacement
+            sdoc.remove(start, end - start);
+            sdoc.insertString(start, rewriteText, attrs);
+
+            // Update stats and state
+            aiCharCount += rewriteText.length(); // Attribute change to AI
             isDirty = true;
-            statusBar.setText("Formatting cleared from selection.");
-            updateStatusBarInfo(); // Update word count etc.
+            updateStatusBarInfo();
+            statusBar.setText("Text rewritten.");
 
-        } catch (BadLocationException | IOException ex) {
+            // Optionally, select the newly inserted text
+            // setSelectionStart(start);
+            // setSelectionEnd(start + rewriteText.length());
+
+        } catch (BadLocationException ex) {
             ex.printStackTrace();
-            statusBar.setText("Error clearing formatting: " + ex.getMessage());
+            statusBar.setText("Error applying rewrite: " + ex.getMessage());
+        }
+    }
+
+    // Helper class for Undoable Edits during replacement
+    private static class ReplaceEdit extends javax.swing.undo.AbstractUndoableEdit {
+        private final StyledDocument document;
+        private final int offset;
+        private final String oldText;
+        private final String newText;
+        private final AttributeSet attributes;
+
+        ReplaceEdit(StyledDocument doc, int offs, int len, String replacement, AttributeSet attrs) {
+            this.document = doc;
+            this.offset = offs;
+            this.newText = replacement;
+            this.attributes = attrs;
+            try {
+                this.oldText = doc.getText(offs, len);
+            } catch (BadLocationException e) {
+                throw new RuntimeException("Error creating undo edit", e); // Should not happen
+            }
+        }
+
+        @Override
+        public void undo() throws CannotUndoException {
+            super.undo();
+            try {
+                document.remove(offset, newText.length());
+                document.insertString(offset, oldText, attributes); // Restore with original attributes
+            } catch (BadLocationException e) {
+                throw new CannotUndoException();
+            }
+        }
+
+        @Override
+        public void redo() throws CannotRedoException {
+            super.redo();
+            try {
+                document.remove(offset, oldText.length());
+                document.insertString(offset, newText, attributes); // Reapply with original attributes
+            } catch (BadLocationException e) {
+                throw new CannotRedoException();
+            }
+        }
+
+        @Override
+        public String getPresentationName() {
+            return "Rewrite Selection";
         }
     }
 }
