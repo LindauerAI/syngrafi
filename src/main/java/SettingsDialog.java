@@ -22,6 +22,7 @@ public class SettingsDialog extends JDialog {
     // AI Settings tab components
     private JTextArea generalStylePromptArea;
     private JTextField maxLengthField;
+    private JTextArea aiReferencesArea;
     private String initialThemeValue; // Store initial theme value
 
     public SettingsDialog(JFrame parent, PreferencesManager preferencesManager) {
@@ -141,8 +142,10 @@ public class SettingsDialog extends JDialog {
     }
 
     private void loadPreferences() {
-        String openAIKey = preferencesManager.getPreference("apiKeyOpenAI", "");
-        String geminiKey = preferencesManager.getPreference("apiKeyGemini", "");
+        // Use getApiKey for sensitive keys
+        String openAIKey = preferencesManager.getApiKey("apiKeyOpenAI"); 
+        String geminiKey = preferencesManager.getApiKey("apiKeyGemini"); 
+        // Use standard getPreference for others
         String provider = preferencesManager.getPreference("provider", "OpenAI");
         String model = preferencesManager.getPreference("model",
                 provider.equals("OpenAI") ? "gpt-4o" : "gemini-2.0-flash");
@@ -152,6 +155,7 @@ public class SettingsDialog extends JDialog {
         String theme = preferencesManager.getPreference("theme", "System");
         String stylePrompt = preferencesManager.getPreference("generalStylePrompt", "");
         String maxLength = preferencesManager.getPreference("autocompleteMaxLength", "100");
+        String references = preferencesManager.getAIReferences();
 
         openAIKeyField.setText(openAIKey);
         geminiKeyField.setText(geminiKey);
@@ -164,6 +168,7 @@ public class SettingsDialog extends JDialog {
         themeComboBox.setSelectedItem(theme);
         generalStylePromptArea.setText(stylePrompt);
         maxLengthField.setText(maxLength);
+        aiReferencesArea.setText(references);
         initialThemeValue = theme; // Store the initially loaded theme
     }
 
@@ -257,6 +262,7 @@ public class SettingsDialog extends JDialog {
         preferencesManager.setPreference("autocompleteDelay", String.valueOf(delay));
         preferencesManager.setPreference("theme", theme);
         preferencesManager.setPreference("generalStylePrompt", generalStylePromptArea.getText().trim());
+        preferencesManager.setAIReferences(aiReferencesArea.getText().trim());
 
         // Validate and save max length
         String maxLengthStr = maxLengthField.getText().trim();
@@ -317,20 +323,32 @@ public class SettingsDialog extends JDialog {
         JPanel panel = new JPanel(new BorderLayout(10, 10));
         panel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
-        panel.add(new JLabel("General Style Prompt (optional):"), BorderLayout.NORTH);
-
+        // --- Top Panel for Style Prompt ---
+        JPanel stylePanel = new JPanel(new BorderLayout(5,5));
+        stylePanel.add(new JLabel("General Style Prompt (optional):"), BorderLayout.NORTH);
         generalStylePromptArea = new JTextArea(5, 40);
         generalStylePromptArea.setLineWrap(true);
         generalStylePromptArea.setWrapStyleWord(true);
-        JScrollPane scrollPane = new JScrollPane(generalStylePromptArea);
-        panel.add(scrollPane, BorderLayout.CENTER);
+        JScrollPane styleScrollPane = new JScrollPane(generalStylePromptArea);
+        stylePanel.add(styleScrollPane, BorderLayout.CENTER);
+        panel.add(stylePanel, BorderLayout.NORTH); // Add style prompt panel to top
 
-        // Add max length setting
+        // --- Center Panel for References ---
+        JPanel referencesPanel = new JPanel(new BorderLayout(5,5));
+        referencesPanel.add(new JLabel("AI References (optional, one per line - e.g., books, shows):"), BorderLayout.NORTH);
+        aiReferencesArea = new JTextArea(8, 40); // Give more lines for references
+        aiReferencesArea.setLineWrap(true);
+        aiReferencesArea.setWrapStyleWord(true);
+        JScrollPane referencesScrollPane = new JScrollPane(aiReferencesArea);
+        referencesPanel.add(referencesScrollPane, BorderLayout.CENTER);
+        panel.add(referencesPanel, BorderLayout.CENTER); // Add references panel to center
+
+        // --- Bottom Panel for Max Length ---
         JPanel bottomAISettings = new JPanel(new FlowLayout(FlowLayout.LEFT));
         bottomAISettings.add(new JLabel("Max Suggestion Length (chars):"));
         maxLengthField = new JTextField(5);
         bottomAISettings.add(maxLengthField);
-        panel.add(bottomAISettings, BorderLayout.SOUTH);
+        panel.add(bottomAISettings, BorderLayout.SOUTH); // Keep max length at bottom
 
         return panel;
     }

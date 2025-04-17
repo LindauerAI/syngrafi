@@ -36,8 +36,8 @@ public class Syngrafi extends JFrame {
         preferencesManager = new PreferencesManager();
         preferencesManager.loadPreferences();
 
-        String openAIKey = preferencesManager.getPreference("apiKeyOpenAI", "");
-        String geminiKey = preferencesManager.getPreference("apiKeyGemini", "");
+        String openAIKey = preferencesManager.getApiKey("apiKeyOpenAI");
+        String geminiKey = preferencesManager.getApiKey("apiKeyGemini");
         String provider = preferencesManager.getPreference("provider", "OpenAI");
         String model = preferencesManager.getPreference("model",
                 provider.equals("OpenAI") ? "gpt-4o" : "gemini-2.0-flash");
@@ -139,7 +139,8 @@ public class Syngrafi extends JFrame {
     }
 
     private void createTopPanel() {
-        JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 10));
+        // Use BorderLayout to allow toolbar to expand horizontally
+        JPanel topPanel = new JPanel(new BorderLayout()); 
         topPanel.setBorder(BorderFactory.createEmptyBorder(5,5,5,5));
 
         JToolBar toolBar = new JToolBar();
@@ -177,6 +178,13 @@ public class Syngrafi extends JFrame {
         strikeButton.addActionListener(e -> textEditor.applyStrikethrough());
         strikeButton.setMargin(buttonMargin);
         toolBar.add(strikeButton);
+
+        // Add Clear Formatting Button
+        JButton clearFormattingButton = new JButton("Clear Format");
+        clearFormattingButton.setToolTipText("Remove all formatting from selection");
+        clearFormattingButton.addActionListener(e -> textEditor.clearFormatting());
+        clearFormattingButton.setMargin(buttonMargin);
+        toolBar.add(clearFormattingButton);
 
         toolBar.addSeparator();
 
@@ -227,7 +235,7 @@ public class Syngrafi extends JFrame {
 
         toolBar.addSeparator();
 
-        JLabel fontLabel = new JLabel("Font:");
+        JLabel fontLabel = new JLabel("Font: ");
         toolBar.add(fontLabel);
         String[] basicFonts = new String[] { "Serif", "SansSerif", "Monospaced", "Georgia" };
         JComboBox<String> fontCombo = new JComboBox<>(basicFonts);
@@ -239,7 +247,7 @@ public class Syngrafi extends JFrame {
         toolBar.add(fontCombo);
 
         toolBar.addSeparator();
-        JLabel sizeLabel = new JLabel("Size:");
+        JLabel sizeLabel = new JLabel("Size: ");
         toolBar.add(sizeLabel);
         JComboBox<Integer> sizeCombo = new JComboBox<>(new Integer[]{12,14,16,18,24,36});
         sizeCombo.setSelectedItem(12);
@@ -249,9 +257,9 @@ public class Syngrafi extends JFrame {
         });
         toolBar.add(sizeCombo);
 
-        toolBar.addSeparator();
 
-        topPanel.add(toolBar);
+        // Add toolbar to the center of the BorderLayout panel
+        topPanel.add(toolBar, BorderLayout.CENTER); 
         add(topPanel, BorderLayout.NORTH);
     }
 
@@ -478,10 +486,8 @@ public class Syngrafi extends JFrame {
         creationTimestamp = created > 0 ? created : System.currentTimeMillis();
         lastEditTimestamp = lastEdit > 0 ? lastEdit : creationTimestamp;
 
-        int wordCount = countWordsFromHTML(entireText);
-
-        statusBar.setText("Opened: " + file.getName() + " [AI=" + aiChars
-                + ", Human=" + humanChars + ", Words=" + wordCount + "]");
+        // Update status bar using TextEditor's method
+        textEditor.updateStatusBarInfo(); 
     }
 
     public void saveDocument() {
@@ -524,28 +530,18 @@ public class Syngrafi extends JFrame {
 
             textToSave += "\n" + metadata + "\n";
 
-            int wordCount = countWordsFromHTML(textToSave);
-
             try (BufferedWriter writer = new BufferedWriter(new FileWriter(currentFile))) {
                 writer.write(textToSave);
-                statusBar.setText("Saved: " + currentFile.getName()
-                        + " [AI=" + aiCount + ", Human=" + humanCount + ", Words=" + wordCount + "]");
+                // Update status bar using TextEditor's method AFTER saving and marking clean
+                textEditor.markClean(); 
+                textEditor.updateStatusBarInfo(); 
                 preferencesManager.addRecentFile(currentFile.getAbsolutePath());
                 updateRecentFilesMenu();
-                textEditor.markClean();
             } catch (IOException ex) {
                 ex.printStackTrace();
                 statusBar.setText("Error saving file.");
             }
         }
-    }
-
-    private int countWordsFromHTML(String htmlText) {
-        String textOnly = htmlText.replaceAll("<[^>]+>", " ");
-        textOnly = textOnly.replaceAll("&nbsp;", " ");
-        textOnly = textOnly.trim();
-        if (textOnly.isEmpty()) return 0;
-        return textOnly.split("\\s+").length;
     }
 
     private void commitVersion() {

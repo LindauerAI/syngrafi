@@ -34,7 +34,21 @@ public class AutocompletePromptManager {
         // Insert the general style prompt if provided
         if (generalStyle != null && !generalStyle.trim().isEmpty()) {
             promptBuilder.append("\nPlease adhere to the following general style:\n");
-            promptBuilder.append(generalStyle.trim()).append("\n\n");
+            promptBuilder.append(generalStyle.trim()).append("\n");
+        }
+
+        // Retrieve and insert AI references if provided
+        String references = prefs.getAIReferences();
+        if (references != null && !references.trim().isEmpty()) {
+            promptBuilder.append("\nConsider these user-provided references if relevant to the context:\n");
+            // Split by newline and list them
+            String[] refLines = references.trim().split("\\r?\\n");
+            for (String ref : refLines) {
+                 if (!ref.trim().isEmpty()) {
+                     promptBuilder.append("- ").append(ref.trim()).append("\n");
+                 }
+            }
+             promptBuilder.append("\n"); // Add blank line after references
         }
 
         promptBuilder.append("Text before cursor:\n");
@@ -45,7 +59,7 @@ public class AutocompletePromptManager {
 
         // Add the specific instruction from the template
         promptBuilder.append(promptTemplate).append("\n");
-        promptBuilder.append("Provide only the suggested text, without any introductory phrases like \"Here is the suggestion:\".");
+        promptBuilder.append("Provide only the suggested text to go after cursor but before subsequent text, without any introductory phrases like \"Here is the suggestion:\".");
         promptBuilder.append("\nKeep the suggestion concise, ideally under ").append(maxLength).append(" characters.");
 
         return promptBuilder.toString();
