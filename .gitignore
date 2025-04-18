@@ -41,3 +41,5 @@ build/
 versions
 
 *.html
+*.pdf
+*.txt

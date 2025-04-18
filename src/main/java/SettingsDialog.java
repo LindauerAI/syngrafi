@@ -1,4 +1,6 @@
 import javax.swing.*;
+import javax.swing.event.ChangeEvent;
+import javax.swing.event.ChangeListener;
 import java.awt.*;
 import java.awt.event.*;
 
@@ -30,6 +32,10 @@ public class SettingsDialog extends JDialog {
     private JTextArea defaultRewritePromptArea;
     private JTextField numRewriteSuggestionsField;
 
+    // AI Control tab components
+    private JPanel aiControlPanel;
+    private JScrollPane aiControlScroll;
+
     public SettingsDialog(JFrame parent, PreferencesManager preferencesManager) {
         super(parent, "Settings", true);
         this.preferencesManager = preferencesManager;
@@ -50,6 +56,19 @@ public class SettingsDialog extends JDialog {
         JPanel rewriteTab = createRewriteTab();
         tabbedPane.addTab("Rewrite", rewriteTab);
 
+        JPanel aiControlTab = createAIControlTab();
+        tabbedPane.addTab("AI Routing", aiControlTab);
+
+        tabbedPane.addChangeListener(new ChangeListener() {
+            @Override
+            public void stateChanged(ChangeEvent e) {
+                JTabbedPane source = (JTabbedPane) e.getSource();
+                if ("AI Control".equals(source.getTitleAt(source.getSelectedIndex()))) {
+                    refreshAIControlPanel();
+                }
+            }
+        });
+
         add(tabbedPane, BorderLayout.CENTER);
 
         // --- Bottom panel ---
@@ -67,7 +86,6 @@ public class SettingsDialog extends JDialog {
 
         loadPreferences();
     }
-
 
     private JPanel createGeneralTab() {
         JPanel panel = new JPanel(new GridBagLayout());
@@ -287,6 +305,32 @@ public class SettingsDialog extends JDialog {
         preferencesManager.setNumRewriteSuggestions(numRewriteSuggest);
         preferencesManager.setDefaultRewritePrompt(defaultRewritePromptArea.getText().trim());
 
+        // Save AI Control models
+        if (aiControlPanel != null) {
+            for (Component comp : aiControlPanel.getComponents()) {
+                if (comp instanceof JPanel) {
+                    JPanel row = (JPanel) comp;
+                    for (Component c : row.getComponents()) {
+                        if (c instanceof JComboBox) {
+                            JComboBox<?> combo = (JComboBox<?>) c;
+                            Object feature = combo.getClientProperty("feature");
+                            Object idxObj = combo.getClientProperty("index");
+                            if (feature instanceof String && idxObj instanceof Integer) {
+                                String feat = (String) feature;
+                                int idx = (Integer) idxObj;
+                                String val = (String) combo.getSelectedItem();
+                                if ("autocomplete".equals(feat)) {
+                                    preferencesManager.setPreference("autocompleteModel" + idx, val);
+                                } else if ("rewrite".equals(feat)) {
+                                    preferencesManager.setPreference("rewriteModel" + idx, val);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         preferencesManager.savePreferences();
 
         String newTheme = (String) themeComboBox.getSelectedItem();
@@ -385,4 +429,62 @@ public class SettingsDialog extends JDialog {
         return panel;
     }
 
+    private JPanel createAIControlTab() {
+        JPanel container = new JPanel(new BorderLayout(10, 10));
+        container.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        aiControlPanel = new JPanel();
+        aiControlPanel.setLayout(new BoxLayout(aiControlPanel, BoxLayout.Y_AXIS));
+        aiControlScroll = new JScrollPane(aiControlPanel);
+        container.add(aiControlScroll, BorderLayout.CENTER);
+        refreshAIControlPanel();
+        return container;
+    }
+
+    private void refreshAIControlPanel() {
+        if (aiControlPanel == null) return;
+        aiControlPanel.removeAll();
+        // Autocomplete Models section
+        JLabel autoHeader = new JLabel("Autocomplete Models:");
+        autoHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        aiControlPanel.add(autoHeader);
+        int numAuto;
+        try {
+            numAuto = Math.max(1, Math.min(10, Integer.parseInt(numAutocompleteSuggestionsField.getText().trim())));
+        } catch (Exception ex) {
+            numAuto = 3;
+        }
+        for (int i = 1; i <= numAuto; i++) {
+            String storedModel = preferencesManager.getPreference("autocompleteModel" + i,
+                    (String) modelComboBox.getSelectedItem());
+            JPanel row = new JPanel(new FlowLayout(FlowLayout.LEFT));
+            row.add(new JLabel("Suggestion #" + i + ":"));
+            JComboBox<String> modelSelect = new JComboBox<>(new String[]{
+                    "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+                    "gemini-2.0-flash-lite", "gemini-2.0-flash"});
+            modelSelect.setSelectedItem(storedModel);
+            modelSelect.putClientProperty("feature", "autocomplete");
+            modelSelect.putClientProperty("index", i);
+            row.add(modelSelect);
+            aiControlPanel.add(row);
+        }
+        // Rewrite Model section
+        aiControlPanel.add(Box.createVerticalStrut(10));
+        JLabel rewriteHeader = new JLabel("Rewrite Models:");
+        rewriteHeader.setAlignmentX(Component.LEFT_ALIGNMENT);
+        aiControlPanel.add(rewriteHeader);
+        String storedRewriteModel = preferencesManager.getPreference("rewriteModel1",
+                (String) modelComboBox.getSelectedItem());
+        JPanel rewriteRow = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        rewriteRow.add(new JLabel("Rewrite Model:"));
+        JComboBox<String> rewriteSelect = new JComboBox<>(new String[]{
+                "gpt-4o", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+                "gemini-2.0-flash-lite", "gemini-2.0-flash"});
+        rewriteSelect.setSelectedItem(storedRewriteModel);
+        rewriteSelect.putClientProperty("feature", "rewrite");
+        rewriteSelect.putClientProperty("index", 1);
+        rewriteRow.add(rewriteSelect);
+        aiControlPanel.add(rewriteRow);
+        aiControlPanel.revalidate();
+        aiControlPanel.repaint();
+    }
 }
